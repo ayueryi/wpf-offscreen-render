@@ -1,11 +1,13 @@
 using System.IO;
 using System.Reflection;
-using System.Text.Json;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Windows;
 using System.Windows.Markup;
 
 // 读取生成器写入的 harness.json：按配置合并资源字典，并按类型名或松散 XAML 创建视图。
 // 修改 harness.json 后无需重新构建，可直接 -NoBuild 再渲染。
+// 只使用 .NET Framework 4.7.2 与 .NET 5+ 共有的 API，同一份源码适配全部受支持的 TFM。
 internal static class ConfiguredView
 {
     internal static string? ConfigPath { get; set; }
@@ -14,15 +16,16 @@ internal static class ConfiguredView
     public static FrameworkElement? TryCreate(string theme)
     {
         if (ConfigPath is null || !File.Exists(ConfigPath)) return null;
-        var config = JsonSerializer.Deserialize<HarnessConfig>(File.ReadAllText(ConfigPath),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new HarnessConfig();
+        HarnessConfig config;
+        using (var stream = File.OpenRead(ConfigPath))
+            config = (HarnessConfig?)new DataContractJsonSerializer(typeof(HarnessConfig)).ReadObject(stream) ?? new HarnessConfig();
         if (config.ViewType is not null && config.Xaml is not null)
             throw new InvalidOperationException("harness.json 中 viewType 与 xaml 只能二选一。");
 
         foreach (var source in config.ResourceDictionaries ?? [])
         {
-            var resolved = source.Replace("{theme}", theme, StringComparison.Ordinal);
-            var uri = Path.IsPathFullyQualified(resolved)
+            var resolved = source.Replace("{theme}", theme);
+            var uri = IsFullyQualifiedPath(resolved)
                 ? new Uri(resolved, UriKind.Absolute)
                 : new Uri(resolved, UriKind.RelativeOrAbsolute);
             Application.Current.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
@@ -47,6 +50,11 @@ internal static class ConfiguredView
         return view;
     }
 
+    // 盘符绝对路径或 UNC 路径；"/MyUi;component/..." 这类 pack URI 不算。
+    private static bool IsFullyQualifiedPath(string path) =>
+        path.StartsWith(@"\\", StringComparison.Ordinal)
+        || path.Length >= 3 && char.IsLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/');
+
     // 支持程序集限定名，或仅写全名时在已加载程序集与输出目录 DLL 中查找。
     private static Type ResolveType(string name)
     {
@@ -70,11 +78,13 @@ internal static class ConfiguredView
         throw new InvalidOperationException($"找不到类型：{name}。确认已通过 -AssemblyPath 引用其程序集，且类型名含完整命名空间。");
     }
 
+    // 键名区分大小写，与生成器写入的 harness.json 一致。
+    [DataContract]
     private sealed class HarnessConfig
     {
-        public string? ViewType { get; set; }
-        public string? Xaml { get; set; }
-        public string? DataContextType { get; set; }
-        public string[]? ResourceDictionaries { get; set; }
+        [DataMember(Name = "viewType")] public string? ViewType { get; set; }
+        [DataMember(Name = "xaml")] public string? Xaml { get; set; }
+        [DataMember(Name = "dataContextType")] public string? DataContextType { get; set; }
+        [DataMember(Name = "resourceDictionaries")] public string[]? ResourceDictionaries { get; set; }
     }
 }

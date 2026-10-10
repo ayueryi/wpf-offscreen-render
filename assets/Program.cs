@@ -1,10 +1,11 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -12,6 +13,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
+// 只使用 .NET Framework 4.7.2 与 .NET 5+ 共有的 API，同一份源码适配全部受支持的 TFM。
 internal static class Program
 {
     [STAThread]
@@ -39,6 +41,7 @@ internal static class Program
         {
             FrameworkElement? view = null;
             Window? window = null;
+            List<KeyValuePair<string, object?>>? manifest = null;
             var marker = "WpfRenderSelfCheck_" + Guid.NewGuid().ToString("N");
             using var listener = new BindingListener(marker);
             try
@@ -107,24 +110,29 @@ internal static class Program
                 encoder.Frames.Add(BitmapFrame.Create(bitmap));
                 using (var stream = File.Create(pngPath)) encoder.Save(stream);
                 listener.Flush();
-                var manifest = new
-                {
-                    generatedAt = DateTime.UtcNow.ToString("O"),
-                    mode = hosted ? "window-host" : "layout-only",
-                    sourceViewType = view.GetType().FullName,
-                    theme, widthDip = width, heightDip = height, pixelWidth, pixelHeight, dpi,
-                    actualWidthDip = root.ActualWidth, actualHeightDip = root.ActualHeight,
-                    background = background?.ToString() ?? "transparent", backgroundSource,
-                    bindingTraceVerified = listener.SelfCheckHit,
-                    bindingWarningOrErrorCount = listener.Errors.Count,
-                    image = "snapshot.png",
-                    sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pngPath))).ToLowerInvariant(),
-                    runtime = Environment.Version.ToString(),
-                    machineName = Environment.MachineName,
-                    note = "Visual snapshot; native windows, input, and performance require separate verification."
-                };
-                File.WriteAllText(Path.Combine(outDir, "manifest.json"),
-                    JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+                string sha256;
+                using (var sha = SHA256.Create())
+                    sha256 = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(pngPath))).Replace("-", "").ToLowerInvariant();
+                // 绑定问题条数与退出码在 finally 中补齐后一次性写出。
+                manifest =
+                [
+                    new("generatedAt", DateTime.UtcNow.ToString("O")),
+                    new("mode", hosted ? "window-host" : "layout-only"),
+                    new("sourceViewType", view.GetType().FullName),
+                    new("theme", theme),
+                    new("widthDip", width), new("heightDip", height),
+                    new("pixelWidth", pixelWidth), new("pixelHeight", pixelHeight), new("dpi", dpi),
+                    new("actualWidthDip", root.ActualWidth), new("actualHeightDip", root.ActualHeight),
+                    new("background", background?.ToString() ?? "transparent"), new("backgroundSource", backgroundSource),
+                    new("bindingTraceVerified", listener.SelfCheckHit),
+                    new("image", "snapshot.png"),
+                    new("sha256", sha256),
+                    new("targetFramework", typeof(Program).Assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName),
+                    new("runtime", RuntimeInformation.FrameworkDescription),
+                    new("processArchitecture", RuntimeInformation.ProcessArchitecture.ToString()),
+                    new("machineName", Environment.MachineName),
+                    new("note", "Visual snapshot; native windows, input, and performance require separate verification.")
+                ];
                 exitCode = !listener.SelfCheckHit ? 1 : listener.Errors.Count > 0 ? 2 : 0;
                 if (!listener.SelfCheckHit)
                     File.WriteAllText(Path.Combine(outDir, "error.txt"), "绑定监听自检未命中，不能宣称绑定检查通过。");
@@ -150,13 +158,11 @@ internal static class Program
                 PresentationTraceSources.DataBindingSource.Listeners.Remove(listener);
                 File.WriteAllLines(Path.Combine(outDir, "binding-errors.txt"), listener.Errors);
                 if (exitCode == 0 && listener.Errors.Count > 0) exitCode = 2;
-                var manifestPath = Path.Combine(outDir, "manifest.json");
-                if (File.Exists(manifestPath))
+                if (manifest is not null)
                 {
-                    var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!;
-                    manifest["bindingWarningOrErrorCount"] = listener.Errors.Count;
-                    manifest["exitCode"] = exitCode;
-                    File.WriteAllText(manifestPath, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                    manifest.Add(new("bindingWarningOrErrorCount", listener.Errors.Count));
+                    manifest.Add(new("exitCode", exitCode));
+                    File.WriteAllText(Path.Combine(outDir, "manifest.json"), ToJson(manifest));
                 }
                 Console.WriteLine($"{outDir} (exit={exitCode})");
                 app.Shutdown(exitCode);
@@ -178,6 +184,43 @@ internal static class Program
                 > BaseValueSource.DefaultStyleTrigger))
             return (windowBrush, "window");
         return (theme == "dark" ? new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E)) : Brushes.White, "theme-fallback");
+    }
+
+    // 仅覆盖 manifest 用到的值类型：字符串、数字、布尔与 null。
+    private static string ToJson(List<KeyValuePair<string, object?>> fields)
+    {
+        static string Quote(string value)
+        {
+            var builder = new StringBuilder("\"");
+            foreach (var c in value)
+            {
+                switch (c)
+                {
+                    case '"': builder.Append("\\\""); break;
+                    case '\\': builder.Append("\\\\"); break;
+                    case '\n': builder.Append("\\n"); break;
+                    case '\r': builder.Append("\\r"); break;
+                    case '\t': builder.Append("\\t"); break;
+                    default:
+                        if (c < ' ') builder.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                        else builder.Append(c);
+                        break;
+                }
+            }
+            return builder.Append('"').ToString();
+        }
+        static string Format(object? value) => value switch
+        {
+            null => "null",
+            bool b => b ? "true" : "false",
+            string text => Quote(text),
+            double d when double.IsNaN(d) || double.IsInfinity(d) => "null",
+            double d => d.ToString("R", CultureInfo.InvariantCulture),
+            IFormattable number => number.ToString(null, CultureInfo.InvariantCulture),
+            _ => Quote(value.ToString() ?? "")
+        };
+        var lines = fields.Select(field => $"  {Quote(field.Key)}: {Format(field.Value)}");
+        return "{" + Environment.NewLine + string.Join("," + Environment.NewLine, lines) + Environment.NewLine + "}";
     }
 
     private static async Task IdleAsync()
@@ -215,8 +258,8 @@ internal static class Program
         }
         private void Record(string? message)
         {
-            if (string.IsNullOrWhiteSpace(message)) return;
-            if (message.Contains(marker, StringComparison.Ordinal)) { SelfCheckHit = true; return; }
+            if (message is null || string.IsNullOrWhiteSpace(message)) return; // .NET Framework 的 BCL 没有可空注解
+            if (message.IndexOf(marker, StringComparison.Ordinal) >= 0) { SelfCheckHit = true; return; }
             if (seen.Add(message)) Errors.Add(message);
         }
     }

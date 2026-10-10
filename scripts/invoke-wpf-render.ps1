@@ -63,26 +63,33 @@ if (-not $NoBuild) {
     & dotnet build $projectPath -c Debug --nologo -o $binDir *> (Join-Path $outDir 'build.log')
     if ($LASTEXITCODE -ne 0) { Complete-Render 1 'build'; return }
 }
-$dll = Join-Path $binDir 'RenderHarness.dll'
-if (-not (Test-Path -LiteralPath $dll)) {
+# .NET Framework 与启用 apphost 的工程直接运行 exe（位数由 PlatformTarget 决定）；其余经 dotnet 宿主运行 dll。
+$properties = ([xml](Get-Content -LiteralPath $projectPath -Raw)).Project.PropertyGroup
+$useAppHost = "$($properties.TargetFramework)" -like 'net4*' -or "$($properties.UseAppHost)".Trim() -eq 'true'
+$entry = Join-Path $binDir ($(if ($useAppHost) { 'RenderHarness.exe' } else { 'RenderHarness.dll' }))
+if (-not (Test-Path -LiteralPath $entry)) {
     # 兼容旧版生成器的工程：未使用 -o 时产物位于 bin\Debug\<TFM>。
-    $legacy = Get-ChildItem -LiteralPath (Join-Path $HarnessDir 'bin\Debug') -Filter 'RenderHarness.dll' -Recurse -ErrorAction SilentlyContinue |
+    $legacy = Get-ChildItem -LiteralPath (Join-Path $HarnessDir 'bin\Debug') -Filter ([IO.Path]::GetFileName($entry)) -Recurse -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $legacy) {
-        [IO.File]::WriteAllText((Join-Path $outDir 'error.txt'), "渲染程序集不存在：$dll（使用了 -NoBuild 但尚未构建？）")
+        [IO.File]::WriteAllText((Join-Path $outDir 'error.txt'), "渲染程序集不存在：$entry（使用了 -NoBuild 但尚未构建？）")
         Complete-Render 1 'locate'; return
     }
-    $dll = $legacy.FullName
+    $entry = $legacy.FullName
 }
 $startInfo = [Diagnostics.ProcessStartInfo]::new()
-$startInfo.FileName = (Get-Command dotnet -ErrorAction Stop).Source
+$arguments = @('--out', $outDir, '--width', "$Width", '--height', "$Height", '--dpi', "$Dpi", '--theme', $Theme,
+    '--background', $Background)
+if ($useAppHost) { $startInfo.FileName = $entry }
+else {
+    $startInfo.FileName = (Get-Command dotnet -ErrorAction Stop).Source
+    $arguments = @($entry) + $arguments
+}
 $startInfo.WorkingDirectory = $HarnessDir
 $startInfo.UseShellExecute = $false
 $startInfo.CreateNoWindow = $true
 $startInfo.RedirectStandardOutput = $true
 $startInfo.RedirectStandardError = $true
-$arguments = @($dll, '--out', $outDir, '--width', "$Width", '--height', "$Height", '--dpi', "$Dpi", '--theme', $Theme,
-    '--background', $Background)
 $configPath = Join-Path $HarnessDir 'harness.json'
 if (Test-Path -LiteralPath $configPath) { $arguments += '--config', $configPath }
 if ($WindowHost) { $arguments += '--window-host' }
