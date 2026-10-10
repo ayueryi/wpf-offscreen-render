@@ -1,6 +1,6 @@
 # 脚本参数与输出产物
 
-`scripts/` 下各脚本的参数、渲染模式、输出文件、退出码与尺寸 / DPI 规则。使用流程见 [SKILL.md](../SKILL.md) 与 [README](../README.md)，接入业务界面见 [integration.md](integration.md)，验收与排障见 [verification.md](verification.md)。
+`scripts/` 下各脚本的参数、渲染模式、输出文件、退出码与尺寸 / DPI 规则。使用流程见 [SKILL.md](../skills/wpf-offscreen-render/SKILL.md) 与 [README](../README.md)，接入业务界面见 [integration.md](integration.md)，验收与排障见 [verification.md](verification.md)。
 
 ## 脚本参数
 

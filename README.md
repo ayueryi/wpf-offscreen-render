@@ -7,7 +7,7 @@
 - 每次渲染附带 `manifest.json`（尺寸 / DPI / SHA256 / 绑定统计）、逐条解析的绑定错误和布局检查结果（文本截断、被裁切、重叠、尺寸为 0、超出视口）；绑定错误直接体现在退出码上，执行器最后打印 JSON 摘要（`summary.json`），一次调用即可拿到结论。
 - 常见页面免写代码：`-ViewType` / `-Xaml` + `-ResourceDictionary`（支持 `{theme}` 占位）直接渲染业务控件。
 - 不依赖任何 Gallery、业务框架或特定 UI 库；支持 .NET Framework 4.7.2 / 4.8 / 4.8.1 与 .NET 5 – 10 的 WPF，只需要 .NET SDK 与 PowerShell 7。
-- 仓库本身也是一个 Agent Skill（`SKILL.md`），可直接放入 `.agents/skills/` 供 Codex / Claude Code 等代理调用。
+- 同时是 Claude Code 与 Codex 插件：内置 MCP 服务器（`render_view`、`render_matrix`、`compare_snapshots`、`get_layout`、`self_test`），代理调用后直接拿到截图与结构化结论；也可作为普通 Agent Skill 或单独的 MCP 服务器接入其他代理。
 
 | light（layout-only，96 DPI） | dark（layout-only，96 DPI） |
 | --- | --- |
@@ -25,7 +25,7 @@
 - [仓库结构](#仓库结构)
 - [文档导航](#文档导航)
 - [测试](#测试)
-- [作为 Agent Skill 使用](#作为-agent-skill-使用)
+- [安装到代理](#安装到代理)
 - [安全约定](#安全约定)
 
 ---
@@ -132,9 +132,18 @@ flowchart LR
 ```text
 wpf-offscreen-render/
 ├── README.md                     # 本文档
-├── SKILL.md                      # Agent Skill 入口（代理工作流说明）
-├── agents/
-│   └── openai.yaml               # Codex 等代理的显示名与默认提示
+├── .claude-plugin/               # Claude Code 插件清单（plugin.json）与市场清单（marketplace.json）
+├── .codex-plugin/plugin.json     # Codex 插件清单
+├── .agents/plugins/marketplace.json  # Codex 市场清单
+├── .mcp.json                     # MCP 服务器配置（Codex 插件使用；在本仓库中打开代理时也可用）
+├── skills/wpf-offscreen-render/
+│   ├── SKILL.md                  # Agent Skill：何时用、怎么调用、如何读结果
+│   └── agents/openai.yaml        # Codex 显示名、默认提示与依赖
+├── mcp/
+│   ├── start.ps1                 # MCP 服务器启动器：首次运行时编译到本机缓存
+│   ├── invoke-script.ps1         # 服务器调用 scripts/ 的桥接
+│   ├── WpfRenderMcp/             # MCP 服务器（.NET 8，ModelContextProtocol SDK）
+│   └── WpfRenderMcp.Tests/       # 经启动器调用全部工具的 MCP 客户端测试
 ├── assets/                       # 渲染宿主模板，生成器原样复制到临时工程
 │   ├── Program.cs                # STA 宿主：绑定监听、布局、RenderTargetBitmap、manifest
 │   ├── ConfiguredView.cs         # 读取 harness.json：按类型名 / 松散 XAML 创建视图、合并资源字典
@@ -154,7 +163,7 @@ wpf-offscreen-render/
 ├── tests/
 │   ├── run-tests.ps1             # 端到端回归测试，-Quick 可用作环境自检
 │   └── fixtures/                 # 样例程序集（net472 / net8.0-windows）与松散 XAML
-├── .github/workflows/ci.yml      # windows-latest 上运行 tests/run-tests.ps1
+├── .github/workflows/ci.yml      # Windows 渲染测试（含 MCP）+ Linux MCP 协议测试
 └── docs/
     └── images/                   # README 截图
 ```
@@ -167,7 +176,7 @@ wpf-offscreen-render/
 
 | 文档 | 内容 |
 | --- | --- |
-| [SKILL.md](SKILL.md) | 代理工作流：何时用、怎么调用、如何读摘要与报告 |
+| [SKILL.md](skills/wpf-offscreen-render/SKILL.md) | 代理工作流：何时用、怎么调用、如何读摘要与报告 |
 | [references/cli.md](references/cli.md) | 全部脚本参数、渲染模式、输出文件与字段、退出码、尺寸与 DPI |
 | [references/integration.md](references/integration.md) | 接入真实界面：程序集与 TFM 推断、`harness.json`、定制 `ViewFactory.cs`、资源与主题、异步就绪、截图范围 |
 | [references/verification.md](references/verification.md) | 产物验收、布局检查解读、视觉基线比较、故障定位、已知限制、性能验证边界 |
@@ -205,34 +214,51 @@ wpf-offscreen-render/
 
 ---
 
-## 作为 Agent Skill 使用
+## 安装到代理
 
-仓库根目录即 Skill 目录（`SKILL.md` + `agents/` + `assets/` + `scripts/` + `references/` + `tests/`）。不同代理从不同目录发现 Skill：
+所有方式都要求代理运行在 **Windows** 本机（WPF 只能在 Windows 上渲染），并已安装 PowerShell 7 与 .NET 8+ SDK。MCP 服务器首次启动时会编译到 `%LOCALAPPDATA%\wpf-offscreen-render\mcp`（约数秒，之后直接启动）。
 
-| 代理 | 项目级（随仓库共享） | 用户级（本机所有项目） |
-| --- | --- | --- |
-| Claude Code | `<工作区>\.claude\skills\wpf-offscreen-render` | `%USERPROFILE%\.claude\skills\wpf-offscreen-render` |
-| Codex 等读取 `.agents` 的代理 | `<工作区>\.agents\skills\wpf-offscreen-render` | 以对应代理的文档为准 |
+### Claude Code（插件）
 
-```powershell
-$skills = 'C:\path\to\workspace\.claude\skills'   # 或 .agents\skills、$env:USERPROFILE\.claude\skills
-New-Item -ItemType Directory -Path $skills -Force | Out-Null
-
-# 方式一：复制
-robocopy . "$skills\wpf-offscreen-render" /E /XD .git .github docs
-
-# 方式二：目录联接，保持与本仓库同步
-New-Item -ItemType Junction -Path "$skills\wpf-offscreen-render" -Target (Get-Location).Path
-
-# 安装后自检
-& "$skills\wpf-offscreen-render\tests\run-tests.ps1" -Quick
+```text
+/plugin marketplace add ayueryi/wpf-offscreen-render
+/plugin install wpf-offscreen-render@wpf-offscreen-render
 ```
 
-`SKILL.md` 的 `description` 决定代理何时加载此 Skill；修改触发场景时改这一行。
+Claude Code 2.1.275 及以上也可一步安装：`/plugin install wpf-offscreen-render --marketplace ayueryi/wpf-offscreen-render`。插件包含 skill 与 MCP 服务器，工具以 `mcp__plugin_wpf-offscreen-render_wpf-offscreen-render__render_view` 等名称出现。
 
-代理会在用户提到“WPF 离屏截图、RenderTargetBitmap、无焦点界面预览、修改 WPF 后验证视觉效果”时加载 `SKILL.md`，按其中流程生成临时工程、渲染、查看 PNG 并报告：真实页面 / 样例、模式、尺寸与 DPI、主题、绑定检查、视觉结论、未覆盖内容和产物绝对路径。
+### Codex（插件）
 
-修改 Skill 行为时同步更新 `SKILL.md`、`references/` 和本 README，并运行 `tests/run-tests.ps1`（CI 在 `windows-latest` 上对每次推送运行同一脚本）。
+```text
+codex plugin marketplace add ayueryi/wpf-offscreen-render
+```
+
+然后在 Codex 的插件列表中安装 `wpf-offscreen-render`。插件清单为 `.codex-plugin/plugin.json`，skill 位于 `skills/`，MCP 服务器配置在 `.mcp.json`（`cwd` 为插件根目录）。
+
+### 其他代理（单独配置 MCP 服务器）
+
+把仓库克隆到固定位置，在代理的 MCP 配置中添加 stdio 服务器：
+
+```json
+{
+  "mcpServers": {
+    "wpf-offscreen-render": {
+      "command": "pwsh",
+      "args": ["-NoProfile", "-NonInteractive", "-File", "C:\\tools\\wpf-offscreen-render\\mcp\\start.ps1"]
+    }
+  }
+}
+```
+
+Codex 不用插件时可执行 `codex mcp add wpf-offscreen-render -- pwsh -NoProfile -NonInteractive -File C:\tools\wpf-offscreen-render\mcp\start.ps1`。需要工作流说明时，再把 `skills\wpf-offscreen-render` 复制或联接到代理的 skills 目录（Claude Code：`.claude\skills\`；Codex：`.agents\skills\`）；skill 中引用的脚本与文档路径以克隆位置为准。
+
+### 安装后自检
+
+让代理调用 `self_test` 工具，或直接运行 `tests\run-tests.ps1 -Quick`，通过时输出 `2 通过，0 失败`。
+
+### 维护
+
+`skills/wpf-offscreen-render/SKILL.md` 的 `description` 决定代理何时加载此 skill。修改行为时同步更新 SKILL.md、`references/` 和本 README，并运行 `tests/run-tests.ps1`；插件清单用 `claude plugin validate --strict` 校验（CI 中同样运行）。
 
 ---
 

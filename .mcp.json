@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wpf-offscreen-render": {
+      "command": "pwsh",
+      "args": ["-NoProfile", "-NonInteractive", "-File", "./mcp/start.ps1"],
+      "cwd": "."
+    }
+  }
+}

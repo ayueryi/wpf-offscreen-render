@@ -1,6 +1,0 @@
-interface:
-  display_name: "WPF 离屏渲染"
-  short_description: "离屏渲染 WPF / XAML 界面为 PNG，验证布局、主题、DPI 与数据绑定（.NET Framework 4.7.2 – .NET 10）"
-  default_prompt: "使用 $wpf-offscreen-render，在临时独立工程中渲染目标 WPF 页面，并检查截图与绑定日志。"
-policy:
-  allow_implicit_invocation: true

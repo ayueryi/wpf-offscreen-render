@@ -37,7 +37,7 @@ jobs:
           retention-days: 7
 
   mcp-protocol:
-    # MCP 服务器本身跨平台：在 Linux 上验证编译、启动器、工具列表与非 Windows 时的错误处理。
+    # MCP 服务器本身跨平台：在 Linux 上验证编译、启动器、工具列表与非 Windows 时的错误处理，并校验插件清单。
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -50,3 +50,14 @@ jobs:
       - name: Run MCP protocol tests
         shell: pwsh
         run: dotnet run --project mcp/WpfRenderMcp.Tests -c Release -- --root .
+
+      - name: Check plugin manifests consistency
+        shell: pwsh
+        run: ./tests/validate-plugins.ps1
+
+      - name: Validate Claude Code plugin
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude plugin validate --strict .claude-plugin/plugin.json
+          claude plugin validate --strict .
+          claude plugin validate --strict skills

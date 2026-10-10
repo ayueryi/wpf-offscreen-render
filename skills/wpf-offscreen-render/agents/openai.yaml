@@ -1,0 +1,14 @@
+interface:
+  display_name: "WPF 离屏渲染"
+  short_description: "离屏渲染 WPF / XAML 界面为 PNG，验证布局、主题、DPI 与数据绑定（.NET Framework 4.7.2 – .NET 10）"
+  default_prompt: "使用 $wpf-offscreen-render，用 render_view 渲染我刚修改的 WPF 页面，检查截图、绑定错误与布局问题。"
+policy:
+  allow_implicit_invocation: true
+dependencies:
+  tools:
+    - type: "cli"
+      value: "pwsh"
+      description: "PowerShell 7+：启动 MCP 服务器并运行渲染脚本"
+    - type: "cli"
+      value: "dotnet"
+      description: ".NET 8+ SDK：编译 MCP 服务器与临时渲染宿主（WPF 渲染需要 Windows）"
