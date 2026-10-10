@@ -12,7 +12,12 @@ $source = Join-Path $PSScriptRoot 'WpfRenderMcp'
 # 源码哈希决定缓存目录，更新插件后自动重新编译。按统一为 LF 的文本内容与正斜杠相对路径计算：
 # 不同机器的 git 换行设置不同，同版本插件也应得到相同哈希（离线机器可直接复用拷贝来的缓存）。
 $files = Get-ChildItem -LiteralPath $source -File -Recurse |
-    Where-Object { $_.Extension -in '.cs', '.csproj' -and $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } | Sort-Object FullName
+    Where-Object { $_.Extension -in '.cs', '.csproj' -and $_.FullName.Substring($source.Length) -notmatch '[\\/](bin|obj)[\\/]' } | Sort-Object FullName
+# 只看相对源码目录的部分：插件安装路径本身可能含 \bin\ 或 \obj\。
+if (-not ($files | Where-Object Extension -eq '.csproj')) {
+    [Console]::Error.WriteLine("wpf-offscreen-render：$source 下没有找到 MCP 服务器源码（插件文件不完整？）。")
+    exit 1
+}
 $hashInput = ($files | ForEach-Object {
         $text = [IO.File]::ReadAllText($_.FullName).Replace("`r`n", "`n")
         $_.FullName.Substring($source.Length).Replace('\', '/') + ':' +
@@ -44,7 +49,15 @@ if (-not (Test-Path -LiteralPath $server)) {
                 Copy-Item -LiteralPath $file.FullName -Destination $target
             }
             # dotnet 按当前目录查找 global.json：在源码副本目录（带空 global.json）中编译，不受用户项目锁定的 SDK 影响。
-            [IO.File]::WriteAllText((Join-Path $buildSource 'global.json'), '{}', [Text.UTF8Encoding]::new($false))
+            $utf8 = [Text.UTF8Encoding]::new($false)
+            [IO.File]::WriteAllText((Join-Path $buildSource 'global.json'), '{}', $utf8)
+            # 截断 MSBuild 向上查找：缓存目录的上层（用户目录、WPF_RENDER_MCP_CACHE 所在仓库）可能有 Directory.Build.props
+            # 或启用集中包管理的 Directory.Packages.props，会让编译失败。
+            foreach ($name in 'Directory.Build.props', 'Directory.Build.targets') {
+                [IO.File]::WriteAllText((Join-Path $buildSource $name), '<Project />', $utf8)
+            }
+            [IO.File]::WriteAllText((Join-Path $buildSource 'Directory.Packages.props'),
+                '<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>', $utf8)
             [Console]::Error.WriteLine("wpf-offscreen-render：首次启动，正在编译 MCP 服务器到 $outDir …")
             Push-Location -LiteralPath $buildSource
             try {

@@ -2,6 +2,24 @@
 
 版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
 
+## 1.1.3 – 2026-10-10
+
+第四轮全量 review 的修复。
+
+### 修复
+- **只装了 .NET 9 / 10 的机器**：MCP 服务器（面向 net8.0）与 .NET 宿主设置 `RollForward=Major`，原先因缺少 .NET 8 运行时无法启动。
+- **Codex**：插件配置设置启动 / 工具调用超时（180 秒 / 30 分钟，原先使用 Codex 默认的 10 秒 / 60 秒，首次渲染与自检经常超时）。Codex 以插件目录为工作目录启动服务器，相对路径会指向插件内部：此时工具对相对路径与缺少 `config` 的 `preset` 明确报错。更正 1.1.2 中“各工具相对路径含义一致”的说法，它只在以项目目录启动服务器的客户端（如 Claude Code）中成立。
+- **窗口模式**：结果全部写出后才执行业务清理，并且不再关闭窗口或调用 `Application.Shutdown`，业务窗口 `Closing` 中的确认对话框不会再卡住渲染、丢失结果；窗口显示后再强制一次屏外位置与普通状态（业务窗口常在 `Loaded` 中恢复最大化）；RightToLeft 的业务 Window 在摘要中给出 `warning`。
+- 业务代码启动的子进程占用输出管道时，读取宿主输出最多等待 5 秒，不再无限等待。
+- MCP 服务器编译截断上层目录的 `Directory.Build.*` / `Directory.Packages.props`（集中包管理会让编译失败）；安装路径含 `\bin\` / `\obj\` 时不再过滤掉全部源码。
+- 预设中视图的设置按组覆盖 `defaults`（视图写 `xaml` 时不继承 `viewType`，写 `width` / `height` 时不继承 `sizes`）；`list_views` 同样处理。
+- `trust-project.ps1 -Revoke` 在配置已删除的目录中运行时撤销该目录的记录，不再误撤销父目录的配置。
+- 其余：找不到 `dotnet` 时也写出摘要；资源字典与预设路径只把 `pack://`、`file://`、`http(s)://` 视为 URI（自定义 PowerShell 驱动器路径可用）；构建命令为 `.ps1` 时不沿用上一次的退出码；工作区一侧的重命名同样计入新旧路径；授权提示按配置与授权状态分别提示；截断检查比较 Run 的实际字体（含样式设置）并考虑 `LineHeight`；README 提示词统一用 `pwsh -File` 运行脚本。
+
+### 检查
+- MCP 测试新增 Codex 启动方式（`codex.mcp.json` 的相对脚本路径与工作目录）；CI 新增只装 .NET 10 的 MCP 测试。
+- 测试补强：hook 测试同时断言退出码；`-Xaml` 覆盖断言实际渲染的视图类型；新增视图 `xaml` 覆盖 `defaults.viewType`、十六进制名称但无标记文件的目录不被清理。
+
 ## 1.1.2 – 2026-10-10
 
 第三轮全量 review 的修复。

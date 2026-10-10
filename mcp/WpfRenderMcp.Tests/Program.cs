@@ -110,5 +110,21 @@ else
     Check("self_test 通过", selfTest.IsError != true && Texts(selfTest).Contains("0 失败"), Texts(selfTest));
 }
 
+// Codex 的启动方式：codex.mcp.json 中的相对脚本路径 + 以插件目录为工作目录。此时相对路径参数应明确报错。
+var codexServer = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "codex.mcp.json")))!["mcpServers"]!["wpf-offscreen-render"]!;
+await using (var codexClient = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+{
+    Name = "wpf-offscreen-render-codex",
+    Command = codexServer["command"]!.GetValue<string>(),
+    Arguments = codexServer["args"]!.AsArray().Select(arg => arg!.GetValue<string>()).ToList(),
+    WorkingDirectory = Path.GetFullPath(Path.Combine(root, codexServer["cwd"]!.GetValue<string>())),
+})))
+{
+    var codexTools = await codexClient.ListToolsAsync();
+    Check("Codex 启动方式：tools/list", codexTools.Count == 6, string.Join(",", codexTools.Select(tool => tool.Name)));
+    var relative = await codexClient.CallToolAsync("list_views", new Dictionary<string, object?> { ["config"] = "." });
+    Check("Codex 启动方式：相对路径明确报错", relative.IsError == true && Texts(relative).Contains("绝对路径"), Texts(relative));
+}
+
 Console.WriteLine($"{passed} 通过，{failures.Count} 失败");
 return failures.Count == 0 ? 0 : 1;

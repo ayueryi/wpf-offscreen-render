@@ -35,7 +35,8 @@ internal static class Program
             exitCode = 1;
             File.WriteAllText(Path.Combine(outDir, "error.txt"), e.Exception.ToString());
             e.Handled = true;
-            app.Shutdown(1);
+            // 只停止消息循环，不走 Application.Shutdown：它会关闭全部窗口，触发业务窗口 Closing 中的确认对话框。
+            app.Dispatcher.InvokeShutdown();
         };
         app.Dispatcher.InvokeAsync(async () =>
         {
@@ -84,6 +85,13 @@ internal static class Program
                     window.Show();
                     root = window.Content as FrameworkElement
                         ?? throw new InvalidOperationException("Window.Content 必须是 FrameworkElement。");
+                    await IdleAsync();
+                    // 业务窗口常在 SourceInitialized / Loaded 中恢复上次的位置与最大化状态：显示后再强制一次。
+                    window.WindowState = WindowState.Normal;
+                    window.Left = -20000;
+                    window.Top = -20000;
+                    window.Width = width;
+                    window.Height = height;
                     await IdleAsync();
                 }
                 else
@@ -177,6 +185,9 @@ internal static class Program
                     new("runtime", RuntimeInformation.FrameworkDescription),
                     new("processArchitecture", RuntimeInformation.ProcessArchitecture.ToString()),
                     new("machineName", Environment.MachineName),
+                    // 业务 Window 为 RightToLeft 时，镜像变换在 Window 上而截图只渲染其 Content，结果未镜像。
+                    new("warning", hosted && view is Window { FlowDirection: FlowDirection.RightToLeft }
+                        ? "Window.FlowDirection 为 RightToLeft：截图与布局坐标未镜像（镜像在 Window 本身上）。可改为渲染其内容的 UserControl。" : null),
                     new("note", "Visual snapshot; native windows, input, and performance require separate verification.")
                 ];
                 exitCode = !listener.SelfCheckHit ? 1 : listener.Errors.Count > 0 ? 2 : 0;
@@ -190,17 +201,8 @@ internal static class Program
             }
             finally
             {
-                try
-                {
-                    if (view != null) ViewFactory.Cleanup(view);
-                    window?.Close();
-                    listener.Flush();
-                }
-                catch (Exception ex)
-                {
-                    File.AppendAllText(Path.Combine(outDir, "error.txt"), ex.ToString());
-                    exitCode = 1;
-                }
+                // 先写出全部结果，再执行业务清理：清理可能卡住（例如窗口关闭确认框），结果不能因此丢失。
+                listener.Flush();
                 PresentationTraceSources.DataBindingSource.Listeners.Remove(listener);
                 File.WriteAllLines(Path.Combine(outDir, "binding-errors.txt"), listener.Errors);
                 File.WriteAllText(Path.Combine(outDir, "binding-errors.json"), Json.Write(listener.Errors.Select(BindingIssues.Describe).ToList()));
@@ -212,7 +214,18 @@ internal static class Program
                     File.WriteAllText(Path.Combine(outDir, "manifest.json"), Json.Write(manifest));
                 }
                 Console.WriteLine($"{outDir} (exit={exitCode})");
-                app.Shutdown(exitCode);
+                try
+                {
+                    if (view != null) ViewFactory.Cleanup(view);
+                }
+                catch (Exception ex)
+                {
+                    File.AppendAllText(Path.Combine(outDir, "error.txt"), ex.ToString());
+                    exitCode = 1;
+                }
+                // 不关闭窗口、不调用 Application.Shutdown（会关闭全部窗口并触发 Closing 中的确认对话框）：
+                // 只停止消息循环，随后由 Environment.Exit 结束进程。
+                app.Dispatcher.InvokeShutdown();
             }
         });
         app.Run();

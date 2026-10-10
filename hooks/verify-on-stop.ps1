@@ -33,7 +33,9 @@ if ($trust -ne 'trusted') {
     $noticeDir = Join-Path ([IO.Path]::GetTempPath()) 'wpf-render-hook'
     $null = New-Item -ItemType Directory -Path $noticeDir -Force
     $sessionKey = if ($hookInput.session_id) { $hookInput.session_id -replace '[^\w-]', '_' } else { 'default' }
-    $notice = Join-Path $noticeDir "$sessionKey.notice"
+    # 按会话、配置文件与授权状态各提示一次：先“未授权”后“授权后被修改”时仍会再次提示。
+    $configKey = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($configPath.ToLowerInvariant()))) -Algorithm SHA256).Hash.Substring(0, 12)
+    $notice = Join-Path $noticeDir "$sessionKey-$configKey-$trust.notice"
     if (-not (Test-Path -LiteralPath $notice)) {
         Set-Content -LiteralPath $notice -Value $configPath
         $why = if ($trust -eq 'changed') { 'wpf-render.json 在授权后被修改过' } else { '这个项目还没有授权' }
@@ -54,7 +56,8 @@ $changed = @(for ($i = 0; $i -lt $records.Count; $i++) {
         $record = $records[$i].Trim("`n")
         if ($record.Length -lt 4) { continue }
         $record.Substring(3)
-        if ($record[0] -in 'R', 'C') { $i++; if ($i -lt $records.Count) { $records[$i].Trim("`n") } }
+        # 重命名 / 复制可能记录在暂存区列（X）或工作区列（Y，如 git add -N 之后）。
+        if ($record[0] -in 'R', 'C' -or $record[1] -in 'R', 'C') { $i++; if ($i -lt $records.Count) { $records[$i].Trim("`n") } }
     }) | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath((Join-Path $repoRoot $_)).Replace('\', '/') }
 $changed = @($changed)
 if ($changed.Count -eq 0) { Exit-Quietly }
