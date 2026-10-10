@@ -17,7 +17,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'WPF 渲染需要 Windows。' }
-$HarnessDir = (Resolve-Path -LiteralPath $HarnessDir).Path
+$HarnessDir = (Resolve-Path -LiteralPath $HarnessDir).ProviderPath
 $projectPath = Join-Path $HarnessDir 'RenderHarness.csproj'
 if (-not (Test-Path -LiteralPath $projectPath)) { throw "工程不存在：$projectPath" }
 if ([math]::Ceiling($Width * $Dpi / 96.0) * [math]::Ceiling($Height * $Dpi / 96.0) -gt 60000000) {
@@ -43,6 +43,12 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
     $buildErrors = @(if ($Stage -eq 'build' -and (Test-Path -LiteralPath $buildLog)) {
         @(Select-String -LiteralPath $buildLog -Pattern ': error ' | Select-Object -First 10 | ForEach-Object { $_.Line.Trim() } | Select-Object -Unique)
     })
+    # 没有 error.txt 的崩溃（如缺少 WindowsDesktop 运行时，宿主在 Main 之前退出）：用 stderr 末尾说明原因。
+    $errorLines = @(& $read 'error.txt' 15)
+    $stderrLog = Join-Path $outDir 'render.stderr.log'
+    if ($errorLines.Count -eq 0 -and $ExitCode -notin 0, 2 -and (Test-Path -LiteralPath $stderrLog)) {
+        $errorLines = @(Get-Content -LiteralPath $stderrLog -Tail 15 | Where-Object { $_.Trim() })
+    }
     $summary = [ordered]@{
         status = switch ($ExitCode) { 0 { 'ok' } 2 { 'binding-issues' } default { "failed:$Stage" } }
         toolVersion = $manifest.toolVersion
@@ -51,6 +57,7 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
         snapshot = if (Test-Path -LiteralPath $snapshot) { $snapshot } else { $null }
         elementSnapshot = if (Test-Path -LiteralPath (Join-Path $outDir 'element.png')) { Join-Path $outDir 'element.png' } else { $null }
         elementRectDip = $manifest.elementRectDip
+        elementError = $manifest.elementError
         sourceViewType = $manifest.sourceViewType
         mode = $manifest.mode
         theme = $Theme
@@ -63,7 +70,7 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
         layoutIssueCount = $manifest.layoutIssueCount
         layoutIssues = $layoutIssues
         buildErrors = $buildErrors
-        error = @(& $read 'error.txt' 15)
+        error = $errorLines
     }
     $json = $summary | ConvertTo-Json -Depth 3
     [IO.File]::WriteAllText((Join-Path $outDir 'summary.json'), $json, [Text.UTF8Encoding]::new($false))
@@ -73,8 +80,11 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
 }
 
 if (-not $NoBuild) {
-    & dotnet build $projectPath -c Debug --nologo -o $binDir *> (Join-Path $outDir 'build.log')
-    if ($LASTEXITCODE -ne 0) { Complete-Render 1 'build'; return }
+    # dotnet 按当前目录查找 global.json：在宿主目录内构建，才会用到宿主自带的空 global.json，而不是业务仓库锁定的 SDK。
+    Push-Location -LiteralPath $HarnessDir
+    try { & dotnet build $projectPath -c Debug --nologo -o $binDir *> (Join-Path $outDir 'build.log'); $buildCode = $LASTEXITCODE }
+    finally { Pop-Location }
+    if ($buildCode -ne 0) { Complete-Render 1 'build'; return }
 }
 # .NET Framework 与启用 apphost 的工程直接运行 exe（位数由 PlatformTarget 决定）；其余经 dotnet 宿主运行 dll。
 $properties = ([xml](Get-Content -LiteralPath $projectPath -Raw)).Project.PropertyGroup
@@ -91,11 +101,12 @@ if (-not (Test-Path -LiteralPath $entry)) {
     $entry = $legacy.FullName
 }
 $startInfo = [Diagnostics.ProcessStartInfo]::new()
+$dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
 $arguments = @('--out', $outDir, '--width', "$Width", '--height', "$Height", '--dpi', "$Dpi", '--theme', $Theme,
     '--background', $Background)
 if ($useAppHost) { $startInfo.FileName = $entry }
 else {
-    $startInfo.FileName = (Get-Command dotnet -ErrorAction Stop).Source
+    $startInfo.FileName = if ($dotnet) { $dotnet.Source } else { 'dotnet' }
     $arguments = @($entry) + $arguments
 }
 $startInfo.WorkingDirectory = $HarnessDir
@@ -115,7 +126,12 @@ $process.StartInfo = $startInfo
 $exitCode = 1
 $stage = 'render'
 try {
-    $null = $process.Start()
+    # 进程无法启动（AppLocker / 软件限制策略拦截 %TEMP% 下的 exe、找不到 dotnet 等）也要写出 summary.json。
+    try { $null = $process.Start() }
+    catch {
+        [IO.File]::WriteAllText((Join-Path $outDir 'error.txt'), "无法启动渲染进程 $($startInfo.FileName)：$($_.Exception.Message)（若被 AppLocker 等策略拦截，用 -WorkDir / -CacheRoot 把宿主放到允许执行的目录）")
+        Complete-Render 1 'start'; return
+    }
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
     $timer = [Diagnostics.Stopwatch]::StartNew()

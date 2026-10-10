@@ -15,7 +15,7 @@ if (-not $IsWindows) { throw '图像比较依赖 Windows 上的 System.Drawing�
 . (Join-Path $PSScriptRoot 'ImageTools.ps1')
 
 function Resolve-Snapshot([string]$Path) {
-    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
     if (Test-Path -LiteralPath $resolved -PathType Container) { $resolved = Join-Path $resolved 'snapshot.png' }
     if (-not (Test-Path -LiteralPath $resolved)) { throw "找不到截图：$resolved" }
     $manifestPath = Join-Path (Split-Path -Parent $resolved) 'manifest.json'
@@ -28,7 +28,8 @@ function Resolve-Snapshot([string]$Path) {
 $beforeShot = Resolve-Snapshot $Before
 $afterShot = Resolve-Snapshot $After
 if (-not $DiffPath) { $DiffPath = Join-Path (Split-Path -Parent $afterShot.Image) 'diff.png' }
-$DiffPath = [IO.Path]::GetFullPath($DiffPath)
+# 按 PowerShell 当前位置解析（[IO.Path]::GetFullPath 使用进程工作目录，Set-Location 不改变它）。
+$DiffPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DiffPath)
 
 $result = [WpfOffscreenRender.ImageTools]::Compare($beforeShot.Image, $afterShot.Image, $DiffPath, $Tolerance)
 $identical = (Get-FileHash -LiteralPath $beforeShot.Image).Hash -eq (Get-FileHash -LiteralPath $afterShot.Image).Hash

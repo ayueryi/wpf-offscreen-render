@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>WpfRenderMcp</AssemblyName>
     <RootNamespace>WpfRenderMcp</RootNamespace>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>

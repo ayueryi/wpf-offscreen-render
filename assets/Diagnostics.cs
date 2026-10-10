@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Media;
 
 // 把 WPF 绑定 trace 文本拆成目标元素、属性、路径与数据源，供摘要直接给出可读结论。
@@ -54,7 +55,9 @@ internal static class LayoutReport
         public Rect Rect { get; }
     }
 
-    public static (List<KeyValuePair<string, object?>> Report, int IssueCount) Inspect(FrameworkElement root, double width, double height, double pixelsPerDip)
+    // rootToImage：根元素坐标到截图坐标的变换；报告中的矩形与视口检查都使用截图坐标。
+    public static (List<KeyValuePair<string, object?>> Report, int IssueCount) Inspect(FrameworkElement root, GeneralTransform rootToImage,
+        double width, double height, double pixelsPerDip)
     {
         var nodes = new List<object?>();
         var issues = new List<object?>();
@@ -73,11 +76,12 @@ internal static class LayoutReport
             {
                 if (element.Visibility != Visibility.Visible) return;
                 Rect bounds;
-                GeneralTransform toRoot;
+                GeneralTransform toImage;
                 try
                 {
-                    toRoot = ReferenceEquals(element, root) ? Transform.Identity : element.TransformToAncestor(root);
-                    bounds = toRoot.TransformBounds(new Rect(element.RenderSize));
+                    toImage = ReferenceEquals(element, root) ? rootToImage
+                        : new GeneralTransformGroup { Children = { element.TransformToAncestor(root), rootToImage } };
+                    bounds = toImage.TransformBounds(new Rect(element.RenderSize));
                 }
                 catch (InvalidOperationException) { return; }
 
@@ -88,18 +92,18 @@ internal static class LayoutReport
                 var layoutClip = LayoutInformation.GetLayoutClip(element);
                 if (layoutClip is not null && !layoutClip.Bounds.IsEmpty)
                 {
-                    var clipInRoot = toRoot.TransformBounds(layoutClip.Bounds);
-                    clip = Rect.Intersect(clip, clipInRoot);
+                    var clipInImage = toImage.TransformBounds(layoutClip.Bounds);
+                    clip = Rect.Intersect(clip, clipInImage);
                     var intended = element.ClipToBounds || element.Clip is not null || element is ScrollContentPresenter;
                     if (!intended)
                     {
-                        overflowClip = Rect.Intersect(overflowClip, clipInRoot);
+                        overflowClip = Rect.Intersect(overflowClip, clipInImage);
                         slot = Rect.Intersect(slot, layoutClip.Bounds);
                         if (slot.IsEmpty) slot = new Rect(0, 0, 0, 0);
                     }
                 }
                 var selfClipped = slot.Width < element.RenderSize.Width - Tolerance || slot.Height < element.RenderSize.Height - Tolerance;
-                var slotBounds = toRoot.TransformBounds(slot);
+                var slotBounds = toImage.TransformBounds(slot);
 
                 var label = Label(element);
                 var text = (element as TextBlock)?.Text;
@@ -140,12 +144,12 @@ internal static class LayoutReport
 
                     if (element is TextBlock textBlock && textBlock.Text.Length > 0 && hasSlot)
                     {
-                        // 文本问题的矩形同其他问题一样使用相对根元素的坐标。
+                        // 文本问题的矩形同其他问题一样使用截图坐标。
                         var ink = CheckText(textBlock, slot.Size, pixelsPerDip, label, (kind, at, message, _) => Report(kind, at, message, slotBounds));
                         if (!visible.IsEmpty && inks.Count < MaxOverlapCandidates)
                         {
-                            var inkInRoot = Rect.Intersect(toRoot.TransformBounds(ink), clip);
-                            if (!inkInRoot.IsEmpty) inks.Add(new Ink(label, inkInRoot));
+                            var inkInImage = Rect.Intersect(toImage.TransformBounds(ink), clip);
+                            if (!inkInImage.IsEmpty) inks.Add(new Ink(label, inkInImage));
                         }
                     }
                 }
@@ -188,15 +192,17 @@ internal static class LayoutReport
             textBlock.FontSize, Brushes.Black, pixelsPerDip);
         var trimming = textBlock.TextTrimming == TextTrimming.None ? "" : "（已显示省略号）";
         var bounds = new Rect(slot);
+        // 各 Run 自带字号 / 字重 / 字体时，按 TextBlock 统一字体测量会误报或漏报，不检查截断。
+        var measurable = !HasStyledInlines(textBlock.Inlines);
         if (textBlock.TextWrapping == TextWrapping.NoWrap)
         {
-            if (formatted.WidthIncludingTrailingWhitespace > available + Tolerance)
+            if (measurable && formatted.WidthIncludingTrailingWhitespace > available + Tolerance)
                 report("text-truncated", label, $"文本需要宽度 {Number(formatted.WidthIncludingTrailingWhitespace)}，可用 {Number(available)}{trimming}", bounds);
         }
         else
         {
             formatted.MaxTextWidth = Math.Max(available, 1);
-            if (formatted.Height > availableHeight + Tolerance)
+            if (measurable && formatted.Height > availableHeight + Tolerance)
                 report("text-truncated", label, $"换行后需要高度 {Number(formatted.Height)}，可用 {Number(availableHeight)}{trimming}", bounds);
         }
         var inkWidth = Math.Min(formatted.Width, available);
@@ -207,6 +213,21 @@ internal static class LayoutReport
             _ => 0
         };
         return new Rect(padding.Left + offset, padding.Top, inkWidth, Math.Min(formatted.Height, availableHeight));
+    }
+
+    private static bool HasStyledInlines(InlineCollection inlines)
+    {
+        foreach (var inline in inlines)
+        {
+            if (inline.ReadLocalValue(TextElement.FontSizeProperty) != DependencyProperty.UnsetValue
+                || inline.ReadLocalValue(TextElement.FontWeightProperty) != DependencyProperty.UnsetValue
+                || inline.ReadLocalValue(TextElement.FontFamilyProperty) != DependencyProperty.UnsetValue
+                || inline.ReadLocalValue(TextElement.FontStyleProperty) != DependencyProperty.UnsetValue
+                || inline is Bold or Italic
+                || inline is Span span && HasStyledInlines(span.Inlines))
+                return true;
+        }
+        return false;
     }
 
     private static string Label(FrameworkElement element)

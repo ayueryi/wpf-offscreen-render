@@ -2,6 +2,29 @@
 
 版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
 
+## 1.1.2 – 2026-10-10
+
+第三轮全量 review 的修复。
+
+### 修复
+- **SDK 隔离**：`dotnet` 按当前目录（而不是工程目录）查找 `global.json`，1.1.1 写入宿主的空 `global.json` 在从业务仓库目录调用时并不生效。宿主与 MCP 服务器现在都在各自目录内构建，业务仓库锁定的 SDK 不再影响它们。
+- **缓存清理**：原先会删除 `-CacheRoot` 下所有超过保留期的子目录；现在只处理本工具创建的缓存目录。
+- **Stop hook 编码**：hook 的输入、git 输出与 hook 输出统一按 UTF-8 处理（原先使用控制台代码页，中文 Windows 上中文路径的项目找不到配置、中文文件名匹配不到 `watch`、拦截原因变成乱码）；输出 JSON 的非 ASCII 字符转义。
+- **布局坐标**：`layout.json`、`elementRectDip` 改用截图坐标，计入根元素自身的 Margin / 对齐偏移（固定尺寸的视图居中时原先整体偏差），`out-of-viewport` 不再漏报。
+- 业务代码留下的前台线程不再让已完成的渲染因进程无法退出而判为 `failed:timeout`。
+- 预设与显式参数按组覆盖：显式 `-Xaml` 取消预设的 `viewType`（原先报“只能二选一”），显式 `-Width` / `-Height` 取消预设的 `sizes`（原先被静默忽略）。
+- `-Element` 元素截图超过 6000 万像素时不再让整次渲染失败，原因写入 `elementError`。
+- 渲染进程无法启动时（AppLocker 拦截、找不到 `dotnet`）也写出 `summary.json`，状态为 `failed:start`；宿主崩溃且没有 `error.txt` 时，`error` 取 stderr 末尾。
+- MCP 启动器：首次编译使用一次性目录、成功后改名，客户端启动超时后重试不会与遗留的编译冲突；新增 `-BuildOnly` 预热；不再用 `Start-Process -Wait`（会等待 MSBuild 节点等子孙进程，服务器退出后启动器不退出）；源码哈希按统一换行计算，离线拷贝的缓存可复用。
+- MCP 服务器不再读取用户项目目录中的 `appsettings*.json`（格式错误时启动即崩溃）；脚本在服务器的工作目录中运行，相对路径与向上查找 `wpf-render.json` 在各工具中含义一致；`list_views` 容忍注释与尾逗号。
+- `-WindowHost` 重置业务窗口的 `WindowState`，最大化的窗口不再出现在真实屏幕上。
+- `watch` 中的 `**` 可匹配零层目录；重命名时新旧路径都算改动。
+- 程序集 TFM 或位数变化（路径不变）时重新生成缓存宿主；组合为空时报错；`-NoBuild` 找不到产物后缓存能自行恢复。
+- 相对路径按 PowerShell 当前位置解析，UNC 路径可用；`trust-project.ps1 -Revoke` 可撤销已删除配置的授权；`Run` 自带字体的文本不再做截断检查（原先误报）；资源字典可用相对路径。
+
+### 检查
+- 新增用例：固定尺寸视图居中时的元素坐标、上层目录锁定未安装 SDK 时的构建、中文目录中的 Stop hook、预设的按组覆盖、缓存根目录中的无关目录不被删除。
+
 ## 1.1.1 – 2026-10-10
 
 第二轮全量 review 的修复。

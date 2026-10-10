@@ -171,7 +171,7 @@ public sealed class RenderTools(ScriptRunner runner)
     }
 
     [McpServerTool(Name = "get_layout", Title = "Query WPF layout", ReadOnly = true, Idempotent = true, OpenWorld = false)]
-    [Description("读取一次渲染的 layout.json 并筛选：布局问题（可按 kind 过滤），以及名称或文本匹配 element 的元素及其子树（DIP 坐标 [x,y,w,h]，相对根元素）。"
+    [Description("读取一次渲染的 layout.json 并筛选：布局问题（可按 kind 过滤），以及名称或文本匹配 element 的元素及其子树（DIP 坐标 [x,y,w,h]，截图坐标）。"
         + "用于定位 layoutIssues 或 compare_snapshots 变化区域对应的元素，不必读取整个视觉树。")]
     public CallToolResult GetLayout(
         [Description("render_view 返回的 outDir")] string outDir,
@@ -244,7 +244,8 @@ public sealed class RenderTools(ScriptRunner runner)
     private static JsonNode? ReadJson(string path)
     {
         if (!File.Exists(path)) return null;
-        try { return JsonNode.Parse(File.ReadAllText(path)); }
+        // 与 PowerShell 的 ConvertFrom-Json 一样容忍注释与尾逗号，否则带注释的 wpf-render.json 能渲染却列不出视图。
+        try { return JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }); }
         catch (JsonException) { return null; }
     }
 

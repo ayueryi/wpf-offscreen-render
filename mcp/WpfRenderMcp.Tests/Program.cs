@@ -51,7 +51,8 @@ Check("get_layout 缺少目录时报错", missing.IsError == true && Texts(missi
 var presetDir = Directory.CreateTempSubdirectory("wpf-render-preset-").FullName;
 File.WriteAllText(Path.Combine(presetDir, "wpf-render.json"), """
     { "verifyOnStop": true,
-      "defaults": { "assemblyPaths": ["bin/App.dll"], "themes": ["light", "dark"] },
+      // 注释与尾逗号：与脚本使用的 ConvertFrom-Json 一样可以解析
+      "defaults": { "assemblyPaths": ["bin/App.dll"], "themes": ["light", "dark"], },
       "views": { "Order": { "viewType": "App.OrderView", "watch": ["src/Order/**"] }, "Login": { "xaml": "probe.xaml" } } }
     """);
 var views = Json(await Call("list_views", new() { ["config"] = presetDir }));

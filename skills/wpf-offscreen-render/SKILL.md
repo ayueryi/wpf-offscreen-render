@@ -43,7 +43,7 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
    - 需要同时看多个主题 / 尺寸 / DPI 时用 `render_matrix`，先看总览图再按需打开单张；只关心某个控件时传 `element`（`x:Name`）。
 3. DataContext 需要构造参数或 stub 服务时，用 `dataContextFactory`（无参静态工厂方法）；还需要配置资源、等待异步就绪、设置选中态或清理时，用 `factoryFile` 指向业务仓库中受版本管理的 `ViewFactory.cs`。只做一次性探查时也可以改用两步脚本：`scripts/new-wpf-harness.ps1` 生成工程，修改其中的 `ViewFactory.cs`，再用 `scripts/invoke-wpf-render.ps1 -HarnessDir` 渲染。异步页面在 `ViewFactory.WaitUntilReadyAsync` 等待明确完成信号；ContextIdle / 固定延时不能代替业务完成信号。详见 [接入真实界面](../../references/integration.md)。
 4. 先读 JSON 摘要再看图：
-   - `status`：`ok` / `binding-issues` / `failed:<阶段>`。
+   - `status`：`ok` / `binding-issues` / `failed:<阶段>`（`build` / `locate` / `start` / `render` / `timeout`）；多组合的汇总为 `ok` / `binding-issues` / `failed`，逐个组合看 `results`。
    - `bindingIssues`：每条一行，如 `TextBlock#Name.Text <- Path=CustomerNmae（数据源 OrderVm）：…`，直接定位到绑定。
    - `layoutIssues`：自动布局检查（`text-truncated` 文本放不下、`clipped` 被布局空间裁切、`overlap` 文本重叠、`zero-size`、`out-of-viewport`）。它们是线索不是结论，不影响状态；逐条对照截图确认，需要坐标时用 `get_layout` 按元素查询。
    - 失败时看 `buildErrors` 与 `error`，细节在 `outDir` 下的 `build.log`、`error.txt`、`render.stderr.log`。
@@ -54,7 +54,8 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
 ## 输出与执行约定
 
 - 每次渲染创建独立的 `render-时间-GUID` 输出目录；缓存宿主与渲染结果超过 7 天未使用会被自动清理，需要保留的截图另存。
-- 生成的宿主工程自带隔离用的 `Directory.Build.props` / `.targets` / `Directory.Packages.props` 与空的 `global.json`，放在业务仓库内也不会继承其构建配置。
+- 生成的宿主工程自带隔离用的 `Directory.Build.props` / `.targets` / `Directory.Packages.props` 与空的 `global.json`，并在宿主目录内构建，放在业务仓库内或从业务仓库目录调用都不会继承其构建配置与锁定的 SDK。
+- `layout.json`、`elementRectDip` 与 `compare_snapshots` 的区域都是截图坐标（DIP），可以直接互相对照。
 - `background` 默认 `auto`：业务 Window 或已被样式设置的窗口背景优先，否则按主题取白色 / `#1E1E1E`；`transparent` 保留 alpha。底色只是查看用的衬底，不代表业务背景。
 - 只对自己启动的渲染子进程设置超时（默认 120 秒），不会终止其他应用。
 - 宿主注入唯一的错误绑定作为监听自检，只排除这一条标记；`bindingTraceVerified` 为 false 时绑定统计不可信。

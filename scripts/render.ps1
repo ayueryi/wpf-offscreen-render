@@ -44,6 +44,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'WPF 渲染需要 Windows。' }
+# 相对路径按 PowerShell 当前位置解析：.NET 文件 API 使用进程工作目录，Set-Location 不会改变它。
+$CacheRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CacheRoot)
 
 if ($Preset -or $Config -or $Build) {
     if (-not $Config) {
@@ -54,7 +56,7 @@ if ($Preset -or $Config -or $Build) {
         $Config = Join-Path $dir 'wpf-render.json'
     }
     elseif (Test-Path -LiteralPath $Config -PathType Container) { $Config = Join-Path $Config 'wpf-render.json' }
-    $Config = (Resolve-Path -LiteralPath $Config).Path
+    $Config = (Resolve-Path -LiteralPath $Config).ProviderPath
     $configDir = Split-Path -Parent $Config
     $presetFile = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json -AsHashtable
     $views = if ($presetFile.views) { $presetFile.views } else { @{} }
@@ -71,9 +73,17 @@ if ($Preset -or $Config -or $Build) {
         targetFramework = 'TargetFramework', $false; platform = 'Platform', $false; themes = 'Theme', $false; sizes = 'Size', $false; dpis = 'Dpi', $false
         width = 'Width', $false; height = 'Height', $false; background = 'Background', $false; windowHost = 'WindowHost', $false; element = 'Element', $false
     }
+    # 显式参数覆盖预设：互斥的一组参数中显式传了任一个，预设里同组的键都不再生效
+    # （否则预设的 viewType 与显式的 -Xaml 会冲突，预设的 sizes 会让显式的 -Width / -Height 被忽略）。
+    $alsoOverrides = @{ ViewType = 'Xaml'; Xaml = 'ViewType'; DataContextType = 'DataContextFactory'; DataContextFactory = 'DataContextType'; Width = 'Size'; Height = 'Size' }
+    $overridden = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($name in $PSBoundParameters.Keys) {
+        $null = $overridden.Add($name)
+        if ($alsoOverrides.ContainsKey($name)) { $null = $overridden.Add($alsoOverrides[$name]) }
+    }
     foreach ($key in $mapping.Keys) {
         $parameter, $isPath = $mapping[$key]
-        if (-not $settings.ContainsKey($key) -or $PSBoundParameters.ContainsKey($parameter)) { continue }
+        if (-not $settings.ContainsKey($key) -or $overridden.Contains($parameter)) { continue }
         $value = $settings[$key]
         if ($isPath) { $value = @($value | ForEach-Object { & $resolve $_ }); if ($parameter -in 'Xaml', 'FactoryFile') { $value = $value[0] } }
         if ($parameter -eq 'WindowHost') { $value = [switch][bool]$value }
@@ -99,9 +109,15 @@ if ($Preset -or $Config -or $Build) {
 if ($ViewType -and $Xaml) { throw '-ViewType 与 -Xaml 只能二选一。' }
 if ($DataContextType -and $DataContextFactory) { throw '-DataContextType 与 -DataContextFactory 只能二选一。' }
 if (($DataContextType -or $DataContextFactory) -and -not ($ViewType -or $Xaml)) { throw '-DataContextType / -DataContextFactory 需要配合 -ViewType 或 -Xaml。' }
-if ($Xaml) { $Xaml = (Resolve-Path -LiteralPath $Xaml).Path }
-if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).Path }
-$assemblies = @($AssemblyPath | ForEach-Object { (Resolve-Path -LiteralPath $_).Path })
+if ($Xaml) { $Xaml = (Resolve-Path -LiteralPath $Xaml).ProviderPath }
+if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).ProviderPath }
+$assemblies = @($AssemblyPath | ForEach-Object { (Resolve-Path -LiteralPath $_).ProviderPath })
+# 资源字典：pack URI 与绝对路径保持原样；存在的相对路径按当前位置解析（{theme} 按 light 检查）。
+$ResourceDictionary = @($ResourceDictionary | ForEach-Object {
+        if ([IO.Path]::IsPathRooted($_) -or $_ -like '*;component/*' -or $_ -match '^[a-z][a-z0-9+.-]+:' -or
+            -not (Test-Path -LiteralPath $_.Replace('{theme}', 'light'))) { $_ }
+        else { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($_) }
+    })
 
 $generator = Join-Path $PSScriptRoot 'new-wpf-harness.ps1'
 $renderer = Join-Path $PSScriptRoot 'invoke-wpf-render.ps1'
@@ -116,6 +132,7 @@ $combos = @(foreach ($s in $sizes) { foreach ($t in $Theme) { foreach ($d in $Dp
                 $w, $h = $s -split 'x'
                 [pscustomobject]@{ Theme = $t; Width = [int]$w; Height = [int]$h; Dpi = $d }
             } } })
+if ($combos.Count -eq 0) { throw '没有可渲染的组合：-Theme / -Dpi / -Size（或预设的 themes / dpis / sizes）不能为空。' }
 
 # 渲染全部组合：单个组合时照常打印摘要；多个组合时只有第一个可能构建，其余 -NoBuild，最后汇总。
 function Invoke-Combos([string]$HarnessDir, [bool]$SkipBuild) {
@@ -184,7 +201,8 @@ $null = New-Item -ItemType Directory -Path $CacheRoot -Force
 # 同一缓存宿主同一时间只允许一个渲染，避免并发构建写同一个 out\。
 $mutex = [Threading.Mutex]::new($false, "Local\wpf-render-$key")
 try {
-    try { if (-not $mutex.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds + 300))) { throw "等待缓存宿主超时：$workDir" } }
+    # 持有者可能在构建并渲染多个组合（每个最长 TimeoutSeconds），等待上限按 16 个组合加构建时间估算。
+    try { if (-not $mutex.WaitOne([TimeSpan]::FromSeconds(($TimeoutSeconds + 60) * 16 + 900))) { throw "等待缓存宿主超时：$workDir（另一个渲染长时间占用）" } }
     catch [Threading.AbandonedMutexException] { } # 上一个持有者异常退出，锁已转交
 
     $stampPath = Join-Path $workDir 'cache.json'
@@ -198,9 +216,20 @@ try {
     $factorySource = if ($FactoryFile) { $FactoryFile } else { Join-Path $PSScriptRoot '..\assets\ViewFactory.cs' }
     $stamps += "factory|$((Get-FileHash -LiteralPath $factorySource -Algorithm SHA256).Hash)"
     $noBuild = $false
-    if (Test-Path -LiteralPath (Join-Path $workDir 'RenderHarness.csproj')) {
-        $cache = if (Test-Path -LiteralPath $stampPath) { Get-Content -LiteralPath $stampPath -Raw | ConvertFrom-Json }
+    $projectPath = Join-Path $workDir 'RenderHarness.csproj'
+    if (Test-Path -LiteralPath $projectPath) {
+        $cache = if (Test-Path -LiteralPath $stampPath) { try { Get-Content -LiteralPath $stampPath -Raw | ConvertFrom-Json } catch { $null } }
         $noBuild = $cache -and $cache.built -and ((@($cache.stamps) -join "`n") -eq ($stamps -join "`n"))
+        if (-not $noBuild) {
+            # 程序集路径不变但 TFM / 位数变了（如 4.6.1 升级到 4.8、切换“首选 32 位”）：缓存工程中的设置已过时，需要重新生成。
+            $inferred = & $generator @generate -InferOnly
+            $current = ([xml](Get-Content -LiteralPath $projectPath -Raw)).Project.PropertyGroup
+            if ("$($current.TargetFramework)".Trim() -ne $inferred.TargetFramework -or "$($current.PlatformTarget)".Trim() -ne $inferred.Platform) {
+                Remove-Item -LiteralPath $workDir -Recurse -Force
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $projectPath) {
         # 视图配置只影响 harness.json，不需要重新构建。
         # 注意不能叫 $config：PowerShell 变量不区分大小写，会覆盖 [string]$Config 参数。
         $harnessConfig = [ordered]@{
@@ -221,7 +250,8 @@ try {
 
     $run = Invoke-Combos $workDir $noBuild
     $firstStatus = if ($run.Matrix) { $run.FirstStatus } else { (Get-Content -LiteralPath (Join-Path $run.OutDir 'summary.json') -Raw | ConvertFrom-Json).status }
-    $built = $noBuild -or $firstStatus -ne 'failed:build'
+    # 构建失败或找不到产物（-NoBuild 但产物被删）时记为未构建，下次重新构建。
+    $built = [bool]$firstStatus -and $firstStatus -notin 'failed:build', 'failed:locate'
     [IO.File]::WriteAllText($stampPath, ([ordered]@{ built = $built; stamps = $stamps; lastUsed = (Get-Date).ToUniversalTime().ToString('O') } | ConvertTo-Json),
         [Text.UTF8Encoding]::new($false))
 }
@@ -231,11 +261,14 @@ finally {
 }
 
 # 清理过期缓存与渲染结果。只删除能立即拿到互斥量的目录：拿不到说明另一个进程正在使用它。
+# 只处理本工具创建的缓存目录（16 位十六进制名称且含 cache.json 或 RenderHarness.csproj）：-CacheRoot 可能指向共享目录。
 $cutoff = (Get-Date).AddDays(-$RetentionDays)
 foreach ($dir in Get-ChildItem -LiteralPath $CacheRoot -Directory) {
-    if ($dir.FullName -eq $workDir) { continue }
+    if ($dir.FullName -eq $workDir -or $dir.Name -notmatch '^[0-9a-f]{16}$') { continue }
     $stamp = Join-Path $dir.FullName 'cache.json'
-    $lastUsed = if (Test-Path -LiteralPath $stamp) { (Get-Item -LiteralPath $stamp).LastWriteTime } else { $dir.LastWriteTime }
+    $hasStamp = Test-Path -LiteralPath $stamp
+    if (-not $hasStamp -and -not (Test-Path -LiteralPath (Join-Path $dir.FullName 'RenderHarness.csproj'))) { continue }
+    $lastUsed = if ($hasStamp) { (Get-Item -LiteralPath $stamp).LastWriteTime } else { $dir.LastWriteTime }
     if ($lastUsed -ge $cutoff) { continue }
     $lock = [Threading.Mutex]::new($false, "Local\wpf-render-$($dir.Name)")
     try {

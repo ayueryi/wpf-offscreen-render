@@ -26,8 +26,21 @@ if ($List) {
     return
 }
 
+# 配置已被删除或移动：-List 仍会列出它，按路径撤销（不计算哈希）。
+if ($Revoke -and -not (Test-Path -LiteralPath $Path)) {
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    if ([IO.Path]::GetFileName($full) -ne 'wpf-render.json') { $full = Join-Path $full 'wpf-render.json' }
+    $target = $full.Replace('\', '/')
+    $all = @(Read-TrustStore)
+    $kept = @($all | Where-Object { $_.config -ine $target })
+    if ($kept.Count -eq $all.Count) { throw "没有找到 $target 的授权记录（-List 查看已授权的配置）。" }
+    Write-TrustStore $kept
+    Write-Output "已撤销授权：$target"
+    return
+}
+
 if (Test-Path -LiteralPath $Path -PathType Container) {
-    $dir = (Resolve-Path -LiteralPath $Path).Path
+    $dir = (Resolve-Path -LiteralPath $Path).ProviderPath
     while ($dir -and -not (Test-Path -LiteralPath (Join-Path $dir 'wpf-render.json'))) { $dir = Split-Path -Parent $dir }
     if (-not $dir) { throw "从 $Path 向上没有找到 wpf-render.json。" }
     $Path = Join-Path $dir 'wpf-render.json'

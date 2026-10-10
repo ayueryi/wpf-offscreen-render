@@ -18,15 +18,24 @@ param(
     [string]$DataContextFactory,
     [string[]]$ResourceDictionary = @(),
     # 用这个文件替换生成工程中的 ViewFactory.cs（业务仓库中受版本管理的预览工厂）。
-    [string]$FactoryFile
+    [string]$FactoryFile,
+    # 只推断并返回 TargetFramework / Platform，不生成工程（render.ps1 用来判断缓存宿主是否需要重新生成）。
+    [switch]$InferOnly
 )
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'WPF 渲染需要 Windows。' }
 if ($ViewType -and $Xaml) { throw '-ViewType 与 -Xaml 只能二选一。' }
 if ($DataContextType -and $DataContextFactory) { throw '-DataContextType 与 -DataContextFactory 只能二选一。' }
 if (($DataContextType -or $DataContextFactory) -and -not ($ViewType -or $Xaml)) { throw '-DataContextType / -DataContextFactory 需要配合 -ViewType 或 -Xaml。' }
-if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).Path }
-if ($Xaml) { $Xaml = (Resolve-Path -LiteralPath $Xaml).Path }
+# ProviderPath：UNC 路径（\\server\share）的 .Path 带 PowerShell 提供程序前缀，.NET API 无法使用。
+if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).ProviderPath }
+if ($Xaml) { $Xaml = (Resolve-Path -LiteralPath $Xaml).ProviderPath }
+# 资源字典：pack URI（/Asm;component/...）与绝对路径保持原样；存在的相对路径按当前位置解析（{theme} 按 light 检查）。
+$ResourceDictionary = @($ResourceDictionary | ForEach-Object {
+        if ([IO.Path]::IsPathRooted($_) -or $_ -like '*;component/*' -or $_ -match '^[a-z][a-z0-9+.-]+:' -or
+            -not (Test-Path -LiteralPath $_.Replace('{theme}', 'light'))) { $_ }
+        else { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($_) }
+    })
 
 # 读取程序集的 TargetFrameworkAttribute（如 .NETFramework,Version=v4.7.2）与位数要求，不加载程序集。
 function Get-AssemblyTarget([string]$Path) {
@@ -83,13 +92,8 @@ function ConvertTo-FrameworkInfo([string]$Value) {
     }
     $null # .NETStandard 或未标注：两类宿主都可引用，不参与推断
 }
-if (-not $WorkDir) {
-    $WorkDir = Join-Path ([IO.Path]::GetTempPath()) ('wpf-render-' + [guid]::NewGuid().ToString('N'))
-}
-$WorkDir = [IO.Path]::GetFullPath($WorkDir)
-if (Test-Path -LiteralPath $WorkDir) { throw "拒绝覆盖已有目录：$WorkDir" }
 $targets = foreach ($assembly in $AssemblyPath) {
-    $resolved = (Resolve-Path -LiteralPath $assembly).Path
+    $resolved = (Resolve-Path -LiteralPath $assembly).ProviderPath
     if ([IO.Path]::GetExtension($resolved) -notin '.dll', '.exe') { throw "需要 DLL / EXE 引用：$resolved" }
     Get-AssemblyTarget $resolved
 }
@@ -128,6 +132,14 @@ if ($Platform) {
     if ($platforms.Count -eq 1 -and $Platform -ne $platforms[0]) { throw "-Platform $Platform 与业务程序集要求的 $($platforms[0]) 不一致。" }
 }
 else { $Platform = if ($platforms.Count -eq 1) { $platforms[0] } else { 'AnyCPU' } }
+if ($InferOnly) { return [pscustomobject]@{ TargetFramework = $TargetFramework; Platform = $Platform } }
+
+if (-not $WorkDir) {
+    $WorkDir = Join-Path ([IO.Path]::GetTempPath()) ('wpf-render-' + [guid]::NewGuid().ToString('N'))
+}
+# 相对路径按 PowerShell 当前位置解析（[IO.Path]::GetFullPath 用的是进程工作目录，Set-Location 不会改变它）。
+$WorkDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WorkDir)
+if (Test-Path -LiteralPath $WorkDir) { throw "拒绝覆盖已有目录：$WorkDir" }
 
 $references = foreach ($target in $targets) {
     $resolved = $target.Path
