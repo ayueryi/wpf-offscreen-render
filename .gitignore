@@ -1,0 +1,5 @@
+bin/
+obj/
+render-*/
+*.user
+.vs/

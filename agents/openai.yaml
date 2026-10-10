@@ -1,0 +1,6 @@
+interface:
+  display_name: "WPF 离屏渲染"
+  short_description: "独立渲染 WPF 界面为 PNG，验证布局、主题、尺寸、DPI 与数据绑定"
+  default_prompt: "使用 $wpf-offscreen-render，在临时独立工程中渲染目标 WPF 页面，并检查截图与绑定日志。"
+policy:
+  allow_implicit_invocation: true
