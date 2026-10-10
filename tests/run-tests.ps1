@@ -93,10 +93,10 @@ $cases = @(
     @{ Name = 'reject-platform-conflict'; Sample = 'net472-x86'; Generate = @{ Platform = 'x64' }; ExpectGenerateError = '不一致' }
 )
 
-# PNG 头部 IHDR 中的宽度（大端 4 字节，偏移 16）。
+# PNG 头部 IHDR 中的宽度（大端 4 字节，偏移 16）。先转 int：PowerShell 对 byte 移位结果仍是 byte，会截掉高位。
 function Get-PngWidth([string]$Path) {
     $bytes = [IO.File]::ReadAllBytes($Path)
-    ($bytes[16] -shl 24) -bor ($bytes[17] -shl 16) -bor ($bytes[18] -shl 8) -bor $bytes[19]
+    ([int]$bytes[16] -shl 24) -bor ([int]$bytes[17] -shl 16) -bor ([int]$bytes[18] -shl 8) -bor [int]$bytes[19]
 }
 
 # render.ps1 多组合：只构建一次，matrix.json 汇总全部组合并生成 overview.png。
