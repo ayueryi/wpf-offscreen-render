@@ -72,6 +72,7 @@ $cases = @(
     @{ Name = 'render-cache'; Kind = 'Cache'; OneStep = @{ ViewType = 'SampleViews.OrderView'; DataContextType = 'SampleViews.OrderPreviewVm' } }
     @{ Name = 'render-matrix'; Kind = 'Matrix' }
     @{ Name = 'compare-snapshots'; Kind = 'Compare' }
+    @{ Name = 'mcp-server'; Kind = 'Mcp' }
     @{ Name = 'net8-element'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'ClippedButton'; Dpi = 144 }
         Expect = @{ exitCode = 0; elementWidthDip = 300; elementPixelWidth = 450 } }
     @{ Name = 'net8-element-missing'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'NoSuchElement' }
@@ -130,6 +131,20 @@ function Test-Compare($case) {
     if ($LASTEXITCODE -ne 1 -or $different.status -ne 'different') { $failures.Add("换主题应判为不同：$($different.status)") }
     if (-not (@($different.environmentDifferences) -match '^theme: light -> dark$')) { $failures.Add("环境差异缺少 theme：$($different.environmentDifferences -join '; ')") }
     if (-not $different.changedBoundsPx -or -not (Test-Path -LiteralPath $different.diff)) { $failures.Add('缺少变化区域或差异图') }
+    $failures
+}
+
+# MCP 服务器：经 mcp/start.ps1 启动（全新编译缓存），用 MCP 客户端调用全部工具。
+function Test-Mcp($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $env:WPF_RENDER_MCP_CACHE = Join-Path $ArtifactsDir "$($case.Name)-cache"
+    try {
+        $lines = & dotnet run --project (Join-Path $root 'mcp\WpfRenderMcp.Tests') -c Release -- --root $root --sample $samples['net8'] 2>&1 | ForEach-Object { "$_" }
+        $code = $LASTEXITCODE
+    }
+    finally { Remove-Item Env:WPF_RENDER_MCP_CACHE -ErrorAction SilentlyContinue }
+    $lines | Where-Object { $_ -like 'FAIL *' } | ForEach-Object { $failures.Add($_) }
+    if ($code -ne 0 -and $failures.Count -eq 0) { $failures.Add("MCP 测试退出码 $code"); $lines | Select-Object -Last 20 | ForEach-Object { $failures.Add("  $_") } }
     $failures
 }
 

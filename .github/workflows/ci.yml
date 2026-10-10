@@ -35,3 +35,18 @@ jobs:
             ${{ runner.temp }}/wpf-render-tests/*.log
           if-no-files-found: ignore
           retention-days: 7
+
+  mcp-protocol:
+    # MCP 服务器本身跨平台：在 Linux 上验证编译、启动器、工具列表与非 Windows 时的错误处理。
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Run MCP protocol tests
+        shell: pwsh
+        run: dotnet run --project mcp/WpfRenderMcp.Tests -c Release -- --root .
