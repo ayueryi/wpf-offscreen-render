@@ -1,0 +1,9 @@
+<!-- 松散 XAML 样例：DataContext 为字符串，绑定不存在的属性，渲染应以退出码 2 报告绑定问题。 -->
+<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
+        Background="White" Padding="24">
+  <Border.DataContext>
+    <sys:String>sample</sys:String>
+  </Border.DataContext>
+  <TextBlock Text="{Binding MissingProperty}" FontSize="24" />
+</Border>

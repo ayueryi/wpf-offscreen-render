@@ -1,6 +1,6 @@
 ---
 name: wpf-offscreen-render
-description: 独立的 Windows WPF 离屏渲染与界面快照工作流。用于把真实 UserControl、Page 或 Window 渲染为 PNG，检查布局、主题、尺寸、DPI、数据绑定和视觉回归。包含临时 STA 渲染工程生成器、渲染执行器和接入说明；不依赖 UiGallery、HR 或特定 UI 框架。用户提到 WPF 离屏截图、RenderTargetBitmap、无焦点界面预览或修改 WPF 后验证视觉效果时使用。
+description: 在独立临时进程中把真实 WPF UserControl、Page、Window 或松散 XAML 离屏渲染成 PNG，同时输出绑定错误、实际尺寸、DPI 等结构化摘要，用于修改 WPF 界面后验证布局、主题、数据绑定和视觉回归；不启动业务程序、不抢焦点，支持 .NET Framework 4.7.2–4.8.1 与 .NET 5–10。用户要截图、预览或查看 WPF / XAML 界面效果，检查绑定错误，或对比改动前后界面时使用（render, screenshot or preview a WPF view or XAML offscreen; RenderTargetBitmap; WPF visual regression）。不适用于 WinUI、UWP、Avalonia、MAUI、WinForms。
 ---
 
 # WPF 离屏渲染
@@ -19,7 +19,7 @@ description: 独立的 Windows WPF 离屏渲染与界面快照工作流。用于
 
 ## 操作流程
 
-1. 确认 Windows、PowerShell 7、匹配目标项目的 .NET SDK / WindowsDesktop Runtime。检查控件构造和 Loaded 是否触发硬件、网络或写入；用样例 ViewModel / stub 服务隔离这些行为。此 skill 不授予启动生产程序、连接设备或 Git 操作的权限。
+1. 确认 Windows、PowerShell 7、匹配目标项目的 .NET SDK / WindowsDesktop Runtime。首次在某台机器上使用，或渲染异常怀疑是环境问题时，先运行 `& "$skillRoot\tests\run-tests.ps1" -Quick` 自检（会构建两个宿主；通过时输出 `2 通过，0 失败`）。检查控件构造和 Loaded 是否触发硬件、网络或写入；用样例 ViewModel / stub 服务隔离这些行为。此 skill 不授予启动生产程序、连接设备或 Git 操作的权限。
 2. 运行生成器，默认在 `%TEMP%` 建立唯一目录。`$skillRoot` 填此 SKILL.md 所在目录的绝对路径（不要依赖当前目录）。不引用业务程序集时默认 `net8.0-windows`；引用后自动推断，也可显式传 `-TargetFramework net472` / `net48` / `net481` / `netN.0-windows` 和 `-Platform`，与程序集不兼容时生成器直接报错：
 
    ```powershell
