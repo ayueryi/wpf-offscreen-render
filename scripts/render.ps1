@@ -200,14 +200,15 @@ try {
         $cache = if (Test-Path -LiteralPath $stampPath) { Get-Content -LiteralPath $stampPath -Raw | ConvertFrom-Json }
         $noBuild = $cache -and $cache.built -and ((@($cache.stamps) -join "`n") -eq ($stamps -join "`n"))
         # 视图配置只影响 harness.json，不需要重新构建。
-        $config = [ordered]@{
+        # 注意不能叫 $config：PowerShell 变量不区分大小写，会覆盖 [string]$Config 参数。
+        $harnessConfig = [ordered]@{
             viewType = if ($ViewType) { $ViewType } else { $null }
             xaml = if ($Xaml) { $Xaml } else { $null }
             dataContextType = if ($DataContextType) { $DataContextType } else { $null }
             dataContextFactory = if ($DataContextFactory) { $DataContextFactory } else { $null }
             resourceDictionaries = @($ResourceDictionary)
         }
-        [IO.File]::WriteAllText((Join-Path $workDir 'harness.json'), ($config | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $workDir 'harness.json'), ($harnessConfig | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
         Copy-Item -LiteralPath $factorySource -Destination (Join-Path $workDir 'ViewFactory.cs') -Force
     }
     else {
