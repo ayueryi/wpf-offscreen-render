@@ -46,20 +46,45 @@ $harness = & "$skillRoot\scripts\new-wpf-harness.ps1" -AssemblyPath $myUiDll `
 
 ## 资源、主题和 DataContext
 
-在 `ViewFactory.Create(string theme)` 中**先配置资源，再构造 View**。示例形状（替换程序集、字典、类型名称后才能使用）：
+`ViewFactory` 有三个钩子，签名不要改。在 `Create` 中**先配置资源，再构造 View**。示例形状（替换程序集、字典、类型名称后才能使用）：
 
 ```csharp
-Application.Current.Resources.MergedDictionaries.Add(new ResourceDictionary
+using System.Windows;
+using MyUi.Views;          // 替换成真实命名空间
+
+internal static class ViewFactory
 {
-    Source = new Uri("/MyUi;component/Themes/Generic.xaml", UriKind.Relative)
-});
-Application.Current.Resources.MergedDictionaries.Add(new ResourceDictionary
-{
-    Source = new Uri(theme == "dark"
-        ? "/MyUi;component/Themes/Dark.xaml"
-        : "/MyUi;component/Themes/Light.xaml", UriKind.Relative)
-});
-return new MyPage { DataContext = new PreviewViewModel() };
+    // 先配置资源，再构造 View。
+    public static FrameworkElement Create(string theme)
+    {
+        var resources = Application.Current.Resources.MergedDictionaries;
+        resources.Add(new ResourceDictionary
+        {
+            Source = new Uri("/MyUi;component/Themes/Generic.xaml", UriKind.Relative)
+        });
+        resources.Add(new ResourceDictionary
+        {
+            Source = new Uri(theme == "dark"
+                ? "/MyUi;component/Themes/Dark.xaml"
+                : "/MyUi;component/Themes/Light.xaml", UriKind.Relative)
+        });
+
+        return new OrderListPage { DataContext = PreviewViewModel.CreateSample() };
+    }
+
+    // 在布局（以及 window-host 下的 Loaded）之后、截图之前执行，运行在 Dispatcher 线程。
+    public static async Task WaitUntilReadyAsync(FrameworkElement view)
+    {
+        var vm = (PreviewViewModel)view.DataContext;
+        await vm.LoadCompleted.WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    // 释放自己创建的订阅、计时器、Disposable VM / 图像。
+    public static void Cleanup(FrameworkElement view)
+    {
+        (view.DataContext as IDisposable)?.Dispose();
+    }
+}
 ```
 
 按业务项目实际资源加载顺序配置，尤其是 Generic、字体、converter、全局 style 和模板的依赖。若框架需要 ThemeManager / Bootstrap，调用明确的资源初始化入口；不要直接运行生产 `App.OnStartup`、`Root` 或完整 IoC 启动链。

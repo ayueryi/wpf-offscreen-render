@@ -62,6 +62,7 @@ internal static class Program
                 var dpi = int.Parse(Value("--dpi"), CultureInfo.InvariantCulture);
                 var theme = Value("--theme");
                 var hosted = args.Contains("--window-host");
+                var elementName = Optional("--element");
                 view = ViewFactory.Create(theme);
                 FrameworkElement root = view;
                 if (hosted)
@@ -109,6 +110,35 @@ internal static class Program
                 var encoder = new PngBitmapEncoder();
                 encoder.Frames.Add(BitmapFrame.Create(bitmap));
                 using (var stream = File.Create(pngPath)) encoder.Save(stream);
+
+                // -Element：另存指定 x:Name 元素的截图。用 VisualBrush 绘制到原点，避免直接 Render 子元素时带上其在父容器中的偏移。
+                double[]? elementRect = null;
+                if (elementName is not null)
+                {
+                    var target = Descendants(root).FirstOrDefault(element => element.Name == elementName)
+                        ?? throw new InvalidOperationException($"找不到 x:Name 为 {elementName} 的可见元素。可用名称：" +
+                            string.Join(", ", Descendants(root).Select(element => element.Name).Where(name => name.Length > 0).Distinct().Take(40)));
+                    var size = target.RenderSize;
+                    var bounds = ReferenceEquals(target, root) ? new Rect(size) : target.TransformToAncestor(root).TransformBounds(new Rect(size));
+                    elementRect = [Math.Round(bounds.X, 1), Math.Round(bounds.Y, 1), Math.Round(bounds.Width, 1), Math.Round(bounds.Height, 1)];
+                    var elementBitmap = new RenderTargetBitmap(Math.Max(1, (int)Math.Ceiling(size.Width * dpi / 96.0)),
+                        Math.Max(1, (int)Math.Ceiling(size.Height * dpi / 96.0)), dpi, dpi, PixelFormats.Pbgra32);
+                    var drawing = new DrawingVisual();
+                    using (var dc = drawing.RenderOpen())
+                    {
+                        if (background is not null) dc.DrawRectangle(background, null, new Rect(size));
+                        dc.DrawRectangle(new VisualBrush(target)
+                        {
+                            Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top,
+                            ViewboxUnits = BrushMappingMode.Absolute, Viewbox = new Rect(size)
+                        }, null, new Rect(size));
+                    }
+                    elementBitmap.Render(drawing);
+                    var elementEncoder = new PngBitmapEncoder();
+                    elementEncoder.Frames.Add(BitmapFrame.Create(elementBitmap));
+                    using var elementStream = File.Create(Path.Combine(outDir, "element.png"));
+                    elementEncoder.Save(elementStream);
+                }
                 listener.Flush();
                 // 布局检查只提供线索，不影响退出码；检查本身出错时记录原因，不让渲染失败。
                 int? layoutIssueCount = null;
@@ -138,6 +168,9 @@ internal static class Program
                     new("bindingTraceVerified", listener.SelfCheckHit),
                     new("layoutIssueCount", layoutIssueCount),
                     new("layoutReportError", layoutReportError),
+                    new("element", elementName),
+                    new("elementRectDip", elementRect),
+                    new("elementImage", elementName is null ? null : "element.png"),
                     new("image", "snapshot.png"),
                     new("sha256", sha256),
                     new("targetFramework", typeof(Program).Assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName),
@@ -198,6 +231,23 @@ internal static class Program
                 > BaseValueSource.DefaultStyleTrigger))
             return (windowBrush, "window");
         return (theme == "dark" ? new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E)) : Brushes.White, "theme-fallback");
+    }
+
+    // 可见的 FrameworkElement，按视觉树广度优先。
+    private static IEnumerable<FrameworkElement> Descendants(FrameworkElement root)
+    {
+        var queue = new Queue<DependencyObject>();
+        queue.Enqueue(root);
+        while (queue.Count > 0)
+        {
+            var node = queue.Dequeue();
+            if (node is FrameworkElement element)
+            {
+                if (element.Visibility != Visibility.Visible) continue;
+                yield return element;
+            }
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++) queue.Enqueue(VisualTreeHelper.GetChild(node, i));
+        }
     }
 
     private static async Task IdleAsync()

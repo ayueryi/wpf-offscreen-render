@@ -32,7 +32,9 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
 
    - TFM 与位数按 `-AssemblyPath` 自动推断（.NET Framework 4.7.2 – 4.8.1 / .NET 5 – 10，x86 / x64），也可显式传 `-TargetFramework`、`-Platform`；不兼容时直接报错。
    - 同一组程序集复用 `%TEMP%\wpf-render-cache` 中的宿主；只换视图、主题、尺寸时跳过构建，业务程序集或同目录 DLL 变化时自动重新构建。修改业务 UI 后先构建业务项目，再调用 `render.ps1`。
-   - `{theme}` 替换为 `-Theme` 的值；其他参数：`-Width 1280 -Height 800 -Dpi 96 -Background auto -WindowHost`。
+   - `{theme}` 替换为 `-Theme` 的值；其他参数：`-Width 1280 -Height 800 -Dpi 96 -Background auto -WindowHost`，完整参数见 [cli.md](references/cli.md)。
+   - 需要同时看多个主题 / 尺寸 / DPI 时传多个值（`-Theme light, dark -Size 1280x800, 800x600 -Dpi 96, 144`）：只构建一次，返回含 `matrix.json` 与 `overview.png` 的目录，先看总览图再按需打开单张。
+   - 只关心某个控件时加 `-Element <x:Name>`，另存 `element.png`，图片更小、结论更聚焦。
 3. DataContext 需要构造参数或 stub 服务、需要等待异步就绪、要设置选中态或做清理时，改用两步：`new-wpf-harness.ps1` 生成工程，修改其中的 `ViewFactory.cs`，再用 `invoke-wpf-render.ps1 -HarnessDir` 渲染。异步页面在 `ViewFactory.WaitUntilReadyAsync` 等待明确完成信号；ContextIdle / 固定延时不能代替业务完成信号。详见 [接入真实界面](references/integration.md)。
 4. 依赖 Loaded、窗口祖先或实际承载尺寸的页面加 `-WindowHost`。
 5. 先读 JSON 摘要（同存为 `summary.json`）再看图：
@@ -41,7 +43,8 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
    - `layoutIssues`：自动布局检查（`text-truncated` 文本放不下、`clipped` 被布局空间裁切、`overlap` 文本重叠、`zero-size`、`out-of-viewport`）。它们是线索不是结论，不影响退出码；逐条对照截图确认，必要时在 `layout.json` 中按元素名查看完整视觉树坐标。
    - 失败时看 `buildErrors` 与 `error`，细节在 `build.log`、`error.txt`、`render.stderr.log`。
    用可用的图片查看工具实际查看 PNG，再决定是否修正布局。详细验收与故障定位见 [验证和排障](references/verification.md)。
-6. 报告真实页面 / 样例、模式、尺寸与 DPI、主题、绑定检查、视觉结论及未覆盖内容，提供产物绝对路径。临时产物不写入仓库。若用户要求保存基线，另选稳定目录，保留旧基线再生成新快照。
+6. 验证改动效果时，修改前先渲染一次作为基线，修改后用 `compare-snapshots.ps1 -Before <旧输出目录> -After <新输出目录>` 对比：看 `changedBoundsDip` 是否只落在预期区域、`environmentDifferences` 是否为空，并查看 `diff.png`（变化像素标红）。
+7. 报告真实页面 / 样例、模式、尺寸与 DPI、主题、绑定检查、布局检查、视觉结论及未覆盖内容，提供产物绝对路径。临时产物不写入仓库。若用户要求保存基线，另选稳定目录，保留旧基线再生成新快照。
 
 ## 输出与执行约定
 

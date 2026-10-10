@@ -17,6 +17,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $generator = Join-Path $root 'scripts\new-wpf-harness.ps1'
 $renderer = Join-Path $root 'scripts\invoke-wpf-render.ps1'
 $oneStep = Join-Path $root 'scripts\render.ps1'
+$comparer = Join-Path $root 'scripts\compare-snapshots.ps1'
 $fixtures = Join-Path $PSScriptRoot 'fixtures'
 $userArtifacts = [bool]$ArtifactsDir
 if (-not $ArtifactsDir) { $ArtifactsDir = Join-Path ([IO.Path]::GetTempPath()) ('wpf-render-tests-' + [guid]::NewGuid().ToString('N')) }
@@ -68,7 +69,13 @@ $cases = @(
         Expect = @{ exitCode = 0; layoutIssueCount = 5; layoutIssues = $layoutProblemKinds } }
     @{ Name = 'net8-scroll-no-false-positive'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.ScrollListView' }
         Expect = @{ exitCode = 0; layoutIssueCount = 0 } }
-    @{ Name = 'render-cache'; OneStep = @{ ViewType = 'SampleViews.OrderView'; DataContextType = 'SampleViews.OrderPreviewVm' } }
+    @{ Name = 'render-cache'; Kind = 'Cache'; OneStep = @{ ViewType = 'SampleViews.OrderView'; DataContextType = 'SampleViews.OrderPreviewVm' } }
+    @{ Name = 'render-matrix'; Kind = 'Matrix' }
+    @{ Name = 'compare-snapshots'; Kind = 'Compare' }
+    @{ Name = 'net8-element'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'ClippedButton'; Dpi = 144 }
+        Expect = @{ exitCode = 0; elementWidthDip = 300; elementPixelWidth = 450 } }
+    @{ Name = 'net8-element-missing'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'NoSuchElement' }
+        Expect = @{ exitCode = 1; errorPattern = 'ClippedButton' } }
     @{ Name = 'net472-view'; Sample = 'net472'; Generate = @{ ViewType = 'SampleViews.OrderView'; DataContextType = 'SampleViews.OrderPreviewVm' }
         Expect = @{ exitCode = 0; status = 'ok'; harnessTfm = 'net472'; harnessPlatform = 'AnyCPU'
             targetFramework = '.NETFramework,Version=v4.7.2'; runtimePattern = '^\.NET Framework'; processArchitecture = 'X64' } }
@@ -86,8 +93,48 @@ $cases = @(
     @{ Name = 'reject-platform-conflict'; Sample = 'net472-x86'; Generate = @{ Platform = 'x64' }; ExpectGenerateError = '不一致' }
 )
 
+# PNG 头部 IHDR 中的宽度（大端 4 字节，偏移 16）。
+function Get-PngWidth([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    ($bytes[16] -shl 24) -bor ($bytes[17] -shl 16) -bor ($bytes[18] -shl 8) -bor $bytes[19]
+}
+
+# render.ps1 多组合：只构建一次，matrix.json 汇总全部组合并生成 overview.png。
+function Test-Matrix($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $matrixDir = & $oneStep -Theme light, dark -Dpi 96, 144 -Width 640 -Height 360 -CacheRoot (Join-Path $ArtifactsDir "$($case.Name)-cache") 6> $null
+    $exitCode = $LASTEXITCODE
+    $matrixPath = Join-Path "$matrixDir" 'matrix.json'
+    if (-not (Test-Path -LiteralPath $matrixPath)) { $failures.Add("缺少 matrix.json（返回 $matrixDir）"); return $failures }
+    $matrix = Get-Content -LiteralPath $matrixPath -Raw | ConvertFrom-Json
+    if ($exitCode -ne 0 -or $matrix.status -ne 'ok') { $failures.Add("期望 ok / 0，实际 $($matrix.status) / $exitCode") }
+    if ($matrix.rendered -ne 4) { $failures.Add("期望渲染 4 个组合，实际 $($matrix.rendered)") }
+    if (-not $matrix.overview -or -not (Test-Path -LiteralPath $matrix.overview)) { $failures.Add('缺少 overview.png') }
+    $built = @($matrix.results | Where-Object { Test-Path -LiteralPath (Join-Path $_.outDir 'build.log') })
+    if ($built.Count -ne 1) { $failures.Add("期望只构建一次，实际 $($built.Count) 次") }
+    $pixel = @($matrix.results | Where-Object dpi -eq 144 | ForEach-Object { Get-PngWidth $_.snapshot } | Select-Object -Unique)
+    if ("$pixel" -ne '960') { $failures.Add("144 DPI 截图宽度期望 960，实际 $pixel") }
+    $failures
+}
+
+# compare-snapshots.ps1：同条件两次渲染应相同；换主题应不同，并报告环境差异。
+function Test-Compare($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $harness = & $generator -WorkDir (Join-Path $ArtifactsDir "harness\$($case.Name)")
+    $first = & $renderer -HarnessDir $harness.WorkDir -Width 640 -Height 360 6> $null
+    $second = & $renderer -HarnessDir $harness.WorkDir -Width 640 -Height 360 -NoBuild 6> $null
+    $dark = & $renderer -HarnessDir $harness.WorkDir -Width 640 -Height 360 -Theme dark -NoBuild 6> $null
+    $same = & $comparer -Before $first -After $second | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $same.status -ne 'same' -or $same.changedPixels -ne 0) { $failures.Add("同条件渲染应相同：$($same.status)，$($same.changedPixels) 像素") }
+    $different = & $comparer -Before $first -After $dark | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 1 -or $different.status -ne 'different') { $failures.Add("换主题应判为不同：$($different.status)") }
+    if (-not (@($different.environmentDifferences) -match '^theme: light -> dark$')) { $failures.Add("环境差异缺少 theme：$($different.environmentDifferences -join '; ')") }
+    if (-not $different.changedBoundsPx -or -not (Test-Path -LiteralPath $different.diff)) { $failures.Add('缺少变化区域或差异图') }
+    $failures
+}
+
 # render.ps1：同一配置第二次应复用缓存宿主并跳过构建；业务程序集更新后应重新构建。
-function Test-OneStep($case) {
+function Test-Cache($case) {
     $failures = [Collections.Generic.List[string]]::new()
     $source = Join-Path $ArtifactsDir "$($case.Name)-src"
     Copy-Item -LiteralPath (Split-Path -Parent $samples['net8']) -Destination $source -Recurse
@@ -108,7 +155,7 @@ function Test-OneStep($case) {
 }
 
 function Test-Case($case) {
-    if ($case.OneStep) { return Test-OneStep $case }
+    if ($case.Kind) { return & "Test-$($case.Kind)" $case }
     $failures = [Collections.Generic.List[string]]::new()
     $generate = @{ WorkDir = Join-Path $ArtifactsDir "harness\$($case.Name)" }
     if ($case.Generate) { $generate += $case.Generate }
@@ -153,6 +200,16 @@ function Test-Case($case) {
                 foreach ($item in $expected) {
                     if (-not ($found | Where-Object { $_.StartsWith($item, [StringComparison]::Ordinal) })) { $failures.Add("缺少布局问题 $item") }
                 }
+            }
+            'elementWidthDip' {
+                if ("$(@($manifest.elementRectDip)[2])" -ne "$expected") { $failures.Add("元素宽度期望 $expected，实际 $(@($manifest.elementRectDip)[2])") }
+            }
+            'elementPixelWidth' {
+                $width = if ($summary.elementSnapshot) { Get-PngWidth $summary.elementSnapshot }
+                if ("$width" -ne "$expected") { $failures.Add("element.png 宽度期望 $expected，实际 $width") }
+            }
+            'errorPattern' {
+                if (-not (@($summary.error) -match [regex]::Escape($expected))) { $failures.Add("error 中没有 $expected") }
             }
             'runtimePattern' {
                 if ("$($manifest.runtime)" -notmatch $expected) { $failures.Add("runtime：期望匹配 $expected，实际 $($manifest.runtime)") }

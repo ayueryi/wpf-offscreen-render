@@ -4,6 +4,9 @@
 #
 # 缓存：同一组 程序集路径 + TFM + 位数 + 工具版本 复用 %TEMP%\wpf-render-cache 下的同一个宿主。
 # 视图配置每次重写 harness.json；业务程序集的大小 / 修改时间未变时跳过构建，变化时重新构建。
+#
+# 多组合：-Theme / -Dpi / -Size 传多个值时渲染全部组合（只构建一次，每个组合独立进程），
+# 输出 matrix-* 目录，内含 matrix.json 与拼好的 overview.png；返回该目录。
 [CmdletBinding()]
 param(
     [string[]]$AssemblyPath = @(),
@@ -15,10 +18,13 @@ param(
     [string]$Platform,
     [int]$Width = 1280,
     [int]$Height = 800,
-    [int]$Dpi = 96,
-    [string]$Theme = 'light',
+    # 多个视口尺寸，形如 1280x800；指定后忽略 -Width / -Height。
+    [ValidatePattern('^\d+x\d+$')][string[]]$Size,
+    [int[]]$Dpi = @(96),
+    [string[]]$Theme = @('light'),
     [string]$Background = 'auto',
     [switch]$WindowHost,
+    [string]$Element,
     [int]$TimeoutSeconds = 120,
     [string]$CacheRoot = (Join-Path ([IO.Path]::GetTempPath()) 'wpf-render-cache'),
     # 忽略缓存，生成一次性宿主（位于 %TEMP%\wpf-render-<GUID>）。
@@ -38,11 +44,65 @@ $renderer = Join-Path $PSScriptRoot 'invoke-wpf-render.ps1'
 $generate = @{ AssemblyPath = $assemblies; ViewType = $ViewType; Xaml = $Xaml; DataContextType = $DataContextType; ResourceDictionary = $ResourceDictionary }
 if ($TargetFramework) { $generate.TargetFramework = $TargetFramework }
 if ($Platform) { $generate.Platform = $Platform }
-$render = @{ Width = $Width; Height = $Height; Dpi = $Dpi; Theme = $Theme; Background = $Background; WindowHost = $WindowHost; TimeoutSeconds = $TimeoutSeconds }
+$render = @{ Background = $Background; WindowHost = $WindowHost; TimeoutSeconds = $TimeoutSeconds }
+if ($Element) { $render.Element = $Element }
+$sizes = if ($Size) { $Size } else { @("${Width}x$Height") }
+$combos = @(foreach ($s in $sizes) { foreach ($t in $Theme) { foreach ($d in $Dpi) {
+                $w, $h = $s -split 'x'
+                [pscustomobject]@{ Theme = $t; Width = [int]$w; Height = [int]$h; Dpi = $d }
+            } } })
+
+# 渲染全部组合：单个组合时照常打印摘要；多个组合时只有第一个可能构建，其余 -NoBuild，最后汇总。
+function Invoke-Combos([string]$HarnessDir, [bool]$SkipBuild) {
+    if ($combos.Count -eq 1) {
+        $c = $combos[0]
+        $out = & $renderer -HarnessDir $HarnessDir -NoBuild:$SkipBuild -Theme $c.Theme -Width $c.Width -Height $c.Height -Dpi $c.Dpi @render
+        return [pscustomobject]@{ OutDir = "$out"; ExitCode = $LASTEXITCODE; Matrix = $false }
+    }
+    $results = foreach ($c in $combos) {
+        $out = & $renderer -HarnessDir $HarnessDir -NoBuild:$SkipBuild -Theme $c.Theme -Width $c.Width -Height $c.Height -Dpi $c.Dpi @render 6> $null
+        $code = $LASTEXITCODE
+        $SkipBuild = $true
+        $summary = Get-Content -LiteralPath (Join-Path "$out" 'summary.json') -Raw | ConvertFrom-Json
+        [pscustomobject]@{
+            theme = $c.Theme; size = "$($c.Width)x$($c.Height)"; dpi = $c.Dpi; status = $summary.status; exitCode = $code
+            snapshot = $summary.snapshot; bindingIssueCount = $summary.bindingIssueCount; layoutIssueCount = $summary.layoutIssueCount
+            bindingIssues = $summary.bindingIssues; layoutIssues = $summary.layoutIssues; error = $summary.error; buildErrors = $summary.buildErrors; outDir = "$out"
+        }
+        if ($summary.status -eq 'failed:build') { break } # 构建失败时其余组合无法渲染
+    }
+    $results = @($results)
+    $matrixDir = Join-Path $HarnessDir ('matrix-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $null = New-Item -ItemType Directory -Path $matrixDir
+    $shots = @($results | Where-Object { $_.snapshot })
+    $overview = $null
+    if ($shots.Count -gt 0) {
+        try {
+            . (Join-Path $PSScriptRoot 'ImageTools.ps1')
+            $overview = Join-Path $matrixDir 'overview.png'
+            $labels = @($shots | ForEach-Object { "$($_.theme) · $($_.size) · $($_.dpi) DPI · $($_.status)" })
+            [WpfOffscreenRender.ImageTools]::ContactSheet([string[]]@($shots.snapshot), [string[]]$labels, $overview, 480)
+        }
+        catch { $overview = $null; Write-Warning "总览图生成失败：$($_.Exception.Message)" }
+    }
+    # 退出码取最严重者：任一失败为 1，否则任一绑定问题为 2。
+    $codes = @($results.exitCode)
+    $exit = if ($results.Count -lt $combos.Count -or ($codes | Where-Object { $_ -notin 0, 2 })) { 1 } elseif ($codes -contains 2) { 2 } else { 0 }
+    $matrix = [ordered]@{
+        status = switch ($exit) { 0 { 'ok' } 2 { 'binding-issues' } default { 'failed' } }
+        exitCode = $exit; combinations = $combos.Count; rendered = $results.Count; overview = $overview; results = $results
+    }
+    $json = $matrix | ConvertTo-Json -Depth 4
+    [IO.File]::WriteAllText((Join-Path $matrixDir 'matrix.json'), $json, [Text.UTF8Encoding]::new($false))
+    Write-Host $json
+    [pscustomobject]@{ OutDir = $matrixDir; ExitCode = $exit; Matrix = $true; FirstStatus = $results[0].status }
+}
 
 if ($NoCache) {
     $harness = & $generator @generate
-    return & $renderer -HarnessDir $harness.WorkDir @render
+    $run = Invoke-Combos $harness.WorkDir $false
+    $global:LASTEXITCODE = $run.ExitCode
+    return $run.OutDir
 }
 
 # 工具版本：生成器与宿主模板的内容哈希，模板更新后自动换新缓存。
@@ -85,10 +145,9 @@ try {
         $null = & $generator @generate -WorkDir $workDir
     }
 
-    $outDir = & $renderer -HarnessDir $workDir -NoBuild:$noBuild @render
-    $exitCode = $LASTEXITCODE
-    $summary = Get-Content -LiteralPath (Join-Path $outDir 'summary.json') -Raw | ConvertFrom-Json
-    $built = $noBuild -or $summary.status -ne 'failed:build'
+    $run = Invoke-Combos $workDir $noBuild
+    $firstStatus = if ($run.Matrix) { $run.FirstStatus } else { (Get-Content -LiteralPath (Join-Path $run.OutDir 'summary.json') -Raw | ConvertFrom-Json).status }
+    $built = $noBuild -or $firstStatus -ne 'failed:build'
     [IO.File]::WriteAllText($stampPath, ([ordered]@{ built = $built; stamps = $stamps; lastUsed = (Get-Date).ToUniversalTime().ToString('O') } | ConvertTo-Json),
         [Text.UTF8Encoding]::new($false))
 }
@@ -105,8 +164,8 @@ foreach ($dir in Get-ChildItem -LiteralPath $CacheRoot -Directory) {
     $lastUsed = if (Test-Path -LiteralPath $stamp) { (Get-Item -LiteralPath $stamp).LastWriteTime } else { $dir.LastWriteTime }
     if ($lastUsed -lt $cutoff) { Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 }
-Get-ChildItem -LiteralPath $workDir -Directory -Filter 'render-*' | Where-Object { $_.LastWriteTime -lt $cutoff } |
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem -LiteralPath $workDir -Directory | Where-Object { $_.Name -like 'render-*' -or $_.Name -like 'matrix-*' } |
+    Where-Object { $_.LastWriteTime -lt $cutoff } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-$global:LASTEXITCODE = $exitCode
-$outDir
+$global:LASTEXITCODE = $run.ExitCode
+$run.OutDir
