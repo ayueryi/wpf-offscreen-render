@@ -158,6 +158,7 @@ internal static class Program
                 manifest =
                 [
                     new("generatedAt", DateTime.UtcNow.ToString("O")),
+                    new("toolVersion", Optional("--tool-version")),
                     new("mode", hosted ? "window-host" : "layout-only"),
                     new("sourceViewType", view.GetType().FullName),
                     new("theme", theme),

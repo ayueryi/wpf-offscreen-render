@@ -49,7 +49,8 @@ $layoutProblemKinds = @('text-truncated:TextBlock#TruncatedTitle', 'clipped:Butt
 
 $cases = @(
     @{ Name = 'sample-light'; Quick = $true
-        Expect = @{ exitCode = 0; status = 'ok'; sourceViewType = 'System.Windows.Controls.Border'; pixelSize = '1280x800'; mode = 'layout-only'; layoutIssueCount = 0 } }
+        Expect = @{ exitCode = 0; status = 'ok'; sourceViewType = 'System.Windows.Controls.Border'; pixelSize = '1280x800'; mode = 'layout-only'; layoutIssueCount = 0
+            toolVersion = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -TotalCount 1).Trim() } }
     @{ Name = 'xaml-ok'; Quick = $true; Generate = @{ Xaml = Join-Path $fixtures 'ok.xaml' }
         Expect = @{ exitCode = 0; status = 'ok'; sourceViewType = 'System.Windows.Controls.Border'; layoutIssueCount = 0 } }
     @{ Name = 'sample-dark-dpi144'; Render = @{ Theme = 'dark'; Dpi = 144; Width = 640; Height = 360 }
@@ -286,7 +287,7 @@ function Test-Case($case) {
         pixelSize = $summary.pixelSize; actualSizeDip = $summary.actualSizeDip; background = $summary.background
         harnessTfm = $harness.TargetFramework; harnessPlatform = $harness.Platform
         targetFramework = $manifest.targetFramework; processArchitecture = $manifest.processArchitecture
-        layoutIssueCount = $summary.layoutIssueCount
+        layoutIssueCount = $summary.layoutIssueCount; toolVersion = $summary.toolVersion
     }
     foreach ($key in $case.Expect.Keys) {
         $expected = $case.Expect[$key]

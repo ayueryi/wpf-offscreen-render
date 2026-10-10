@@ -45,6 +45,7 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
     })
     $summary = [ordered]@{
         status = switch ($ExitCode) { 0 { 'ok' } 2 { 'binding-issues' } default { "failed:$Stage" } }
+        toolVersion = $manifest.toolVersion
         exitCode = $ExitCode
         outDir = $outDir
         snapshot = if (Test-Path -LiteralPath $snapshot) { $snapshot } else { $null }
@@ -102,6 +103,8 @@ $startInfo.UseShellExecute = $false
 $startInfo.CreateNoWindow = $true
 $startInfo.RedirectStandardOutput = $true
 $startInfo.RedirectStandardError = $true
+$versionFile = Join-Path $PSScriptRoot '..\VERSION'
+if (Test-Path -LiteralPath $versionFile) { $arguments += '--tool-version', (Get-Content -LiteralPath $versionFile -TotalCount 1).Trim() }
 $configPath = Join-Path $HarnessDir 'harness.json'
 if (Test-Path -LiteralPath $configPath) { $arguments += '--config', $configPath }
 if ($WindowHost) { $arguments += '--window-host' }
