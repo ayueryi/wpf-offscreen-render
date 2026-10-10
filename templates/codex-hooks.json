@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "pwsh -NoProfile -NonInteractive -File C:/tools/wpf-offscreen-render/hooks/verify-on-stop.ps1",
+            "command": "pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:/tools/wpf-offscreen-render/hooks/verify-on-stop.ps1",
             "timeout": 900
           }
         ]

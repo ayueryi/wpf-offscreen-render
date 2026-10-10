@@ -2,6 +2,21 @@
 
 版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
 
+## 1.1.1 – 2026-10-10
+
+第二轮全量 review 的修复。
+
+### 修复
+- 所有 pwsh 启动配置（两份插件的 MCP 配置、Stop hook、MCP 服务器调用脚本、README 与模板中的命令）加上 `-ExecutionPolicy Bypass`：从 ZIP 解压安装（文件带“来自网络”标记）或策略为 `AllSigned` 时脚本原先无法运行。只作用于当次进程，组策略强制的设置仍优先。
+- 生成的宿主写入空的 `global.json`，不再继承上层仓库锁定的 SDK 版本（`-WorkDir` 位于业务仓库内时可能无法构建）。
+- 安装路径含 `[` `]` 时，生成器原先静默地没有复制任何宿主源文件；改为按字面路径复制。
+- 渲染超时的状态由 `failed:render` 改为 `failed:timeout`，错误信息给出排查方向。
+
+### 检查
+- MCP 测试改用 `.claude-plugin/plugin.json` 中的真实启动命令；CI 新增在 `AllSigned` 策略下运行 MCP 测试的步骤。
+- `tests/validate-plugins.ps1` 断言所有 pwsh 启动配置带 `-ExecutionPolicy Bypass`。
+- CI 固定 Claude Code CLI 版本。
+
 ## 1.1.0 – 2026-10-10
 
 安全与稳健性修复（全量 review）。

@@ -50,6 +50,14 @@ foreach ($server in @($mcp.mcpServers.Values) + @($claude.mcpServers.Values)) {
     if (-not $script) { $failures.Add('MCP 服务器配置没有指向 mcp/start.ps1'); continue }
     Assert-Path ($script -replace '^\$\{CLAUDE_PLUGIN_ROOT\}/', '' -replace '^\./', '') 'MCP 服务器配置'
 }
+# 所有 pwsh 启动配置都要带 -ExecutionPolicy Bypass：否则从 ZIP 解压（带“来自网络”标记）或策略为 AllSigned 时脚本无法运行。
+$hooks = Read-Json 'hooks/hooks.json'
+$launches = @($mcp.mcpServers.Values) + @($claude.mcpServers.Values) + @($hooks.hooks.Values | ForEach-Object { $_ } | ForEach-Object { $_.hooks })
+foreach ($launch in $launches | Where-Object { $_.command -eq 'pwsh' }) {
+    $joined = @($launch.args) -join ' '
+    if ($joined -notmatch '-ExecutionPolicy Bypass') { $failures.Add("pwsh 启动参数缺少 -ExecutionPolicy Bypass：$joined") }
+}
+
 foreach ($market in @($codexMarket, $claudeMarket)) {
     if ($market -and -not (@($market.plugins) | Where-Object { $_.name -eq $claude.name })) { $failures.Add("市场清单 $($market.name) 未列出插件 $($claude.name)") }
 }

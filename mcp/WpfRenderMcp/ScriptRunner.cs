@@ -33,7 +33,8 @@ public sealed class ScriptRunner(string root)
                 CreateNoWindow = true,
                 WorkingDirectory = Root,
             };
-            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine(Root, "mcp", "invoke-script.ps1"),
+            // -ExecutionPolicy Bypass 只作用于这个进程：从 ZIP 解压（带“来自网络”标记）或策略为 AllSigned 时脚本也能运行。
+            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(Root, "mcp", "invoke-script.ps1"),
                          "-Script", Path.Combine(Root, relativeScript), "-ArgsFile", argsFile, "-ResultFile", resultFile })
                 startInfo.ArgumentList.Add(argument);
             if (captureHost) startInfo.ArgumentList.Add("-CaptureHost");

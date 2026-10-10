@@ -165,6 +165,8 @@ foreach ($file in 'Directory.Build.props', 'Directory.Build.targets') {
 }
 [IO.File]::WriteAllText((Join-Path $WorkDir 'Directory.Packages.props'),
     '<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>', $utf8)
+# 空的 global.json 截断 SDK 版本查找：上层仓库锁定的 SDK（可能未安装或过旧）不影响宿主构建，使用本机最新 SDK。
+[IO.File]::WriteAllText((Join-Path $WorkDir 'global.json'), '{}', $utf8)
 $config = [ordered]@{
     viewType = if ($ViewType) { $ViewType } else { $null }
     xaml = if ($Xaml) { $Xaml } else { $null }
@@ -175,7 +177,8 @@ $config = [ordered]@{
 }
 $configPath = Join-Path $WorkDir 'harness.json'
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 3), $utf8)
-Copy-Item -Path (Join-Path $PSScriptRoot '..\assets\*.cs') -Destination $WorkDir
+# 按字面路径复制：安装目录含 [ ] 时 -Path 会被当作通配符。
+Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '..\assets') -Filter '*.cs' | Copy-Item -Destination $WorkDir
 if ($FactoryFile) { Copy-Item -LiteralPath $FactoryFile -Destination (Join-Path $WorkDir 'ViewFactory.cs') -Force }
 [pscustomobject]@{
     WorkDir = $WorkDir; ProjectPath = Join-Path $WorkDir 'RenderHarness.csproj'; ConfigPath = $configPath

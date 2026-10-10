@@ -19,7 +19,7 @@
 | `-DataContextType` | string | 空 | 用无参构造创建并设为 View 的 `DataContext` |
 | `-ResourceDictionary` | string[] | 空 | 按顺序合并的资源字典（pack URI 或绝对路径），`{theme}` 替换为 `-Theme` 的值 |
 
-视图参数写入 `harness.json`，渲染时才读取；之后修改它或 XAML 文件只需 `-NoBuild` 重新渲染。工程同时写入空的 `Directory.Build.props` / `.targets` 与关闭集中包管理的 `Directory.Packages.props`，放在业务仓库里也不会继承上层构建配置。
+视图参数写入 `harness.json`，渲染时才读取；之后修改它或 XAML 文件只需 `-NoBuild` 重新渲染。工程同时写入空的 `Directory.Build.props` / `.targets`、关闭集中包管理的 `Directory.Packages.props` 与空的 `global.json`（不受上层锁定的 SDK 版本影响），放在业务仓库里也不会继承上层构建配置。
 
 生成的 csproj 关键属性：`OutputType=Exe`、`UseWPF=true`、`ImplicitUsings`、`Nullable`、`LangVersion=latest`、`PlatformTarget`。启动方式由 TFM 和位数决定：
 
@@ -132,7 +132,7 @@
 | `build.log` | 未使用 `-NoBuild` | `dotnet build` 完整输出 |
 | `render.stdout.log` / `render.stderr.log` | 子进程启动后 | 宿主标准输出 / 错误 |
 | `error.txt` | 失败时 | 异常堆栈、自检失败或超时说明 |
-| `summary.json` | 总是 | 结论摘要：`status`（`ok` / `binding-issues` / `failed:build` / `failed:locate` / `failed:render`）、`snapshot`、`elementSnapshot` / `elementRectDip`（使用 `-Element` 时）、`sourceViewType`、尺寸、衬底、前 5 条绑定问题（`bindingIssues`，解析后的单行结论）、布局问题条数与前 10 条（`layoutIssueCount` / `layoutIssues`）、编译错误、异常前 15 行；同时打印到控制台 |
+| `summary.json` | 总是 | 结论摘要：`status`（`ok` / `binding-issues` / `failed:build` / `failed:locate` / `failed:render` / `failed:timeout`）、`snapshot`、`elementSnapshot` / `elementRectDip`（使用 `-Element` 时）、`sourceViewType`、尺寸、衬底、前 5 条绑定问题（`bindingIssues`，解析后的单行结论）、布局问题条数与前 10 条（`layoutIssueCount` / `layoutIssues`）、编译错误、异常前 15 行；同时打印到控制台 |
 
 `layout.json` 的布局问题（只检查有文本的 `TextBlock`、有图像的 `Image` 与 `Control`，容器本身不报告）：
 

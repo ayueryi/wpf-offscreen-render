@@ -53,7 +53,7 @@ $harness | Select-Object TargetFramework, Platform
 
 .NET Framework WPF 程序的界面常常直接写在 `.exe` 里，`-AssemblyPath` 也接受 `.exe`。业务程序依赖 `App.config` 里的配置节时，在生成工程中新建 `App.config` 放入需要的部分；程序集版本的绑定重定向由 SDK 构建时自动生成到 `RenderHarness.exe.config`。
 
-这些路径只是示例，先确认实际程序集名称、版本、输出位置。生成器使用 XML 转义写入 HintPath，路径含空格可正常使用。生成的工程自带隔离用的 `Directory.Build.props` / `.targets` / `Directory.Packages.props`，因此 `-WorkDir` 即使放在业务仓库内，也不会继承上层构建配置。需要额外 NuGet 包、ProjectReference 或依赖 DLL 时修改生成的 `RenderHarness.csproj`。引用 DLL 并不保证所有运行时依赖、native DLL、内容文件都被复制；按错误补齐明确需要的依赖，保留它们的相对目录。不要对生产输出目录做覆盖或全量清理。
+这些路径只是示例，先确认实际程序集名称、版本、输出位置。生成器使用 XML 转义写入 HintPath，路径含空格可正常使用。生成的工程自带隔离用的 `Directory.Build.props` / `.targets` / `Directory.Packages.props` 与空的 `global.json`，因此 `-WorkDir` 即使放在业务仓库内，也不会继承上层构建配置。需要额外 NuGet 包、ProjectReference 或依赖 DLL 时修改生成的 `RenderHarness.csproj`。引用 DLL 并不保证所有运行时依赖、native DLL、内容文件都被复制；按错误补齐明确需要的依赖，保留它们的相对目录。不要对生产输出目录做覆盖或全量清理。
 
 如果只需要公开的 View 类型，优先 DLL 引用以避免业务项目构建前后的副作用。需要自动跟随源码时才使用 ProjectReference，注意目标项目的构建事件。存在 Costura / 单文件发布时，优先业务项目普通构建产物；生产 App 的程序集加载器通常不会在独立宿主里自动注册。
 

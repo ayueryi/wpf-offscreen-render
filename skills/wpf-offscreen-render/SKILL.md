@@ -54,7 +54,7 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
 ## 输出与执行约定
 
 - 每次渲染创建独立的 `render-时间-GUID` 输出目录；缓存宿主与渲染结果超过 7 天未使用会被自动清理，需要保留的截图另存。
-- 生成的宿主工程自带隔离用的 `Directory.Build.props` / `.targets` / `Directory.Packages.props`，放在业务仓库内也不会继承其构建配置。
+- 生成的宿主工程自带隔离用的 `Directory.Build.props` / `.targets` / `Directory.Packages.props` 与空的 `global.json`，放在业务仓库内也不会继承其构建配置。
 - `background` 默认 `auto`：业务 Window 或已被样式设置的窗口背景优先，否则按主题取白色 / `#1E1E1E`；`transparent` 保留 alpha。底色只是查看用的衬底，不代表业务背景。
 - 只对自己启动的渲染子进程设置超时（默认 120 秒），不会终止其他应用。
 - 宿主注入唯一的错误绑定作为监听自检，只排除这一条标记；`bindingTraceVerified` 为 false 时绑定统计不可信。

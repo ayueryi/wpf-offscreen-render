@@ -34,7 +34,7 @@ if ($trust -ne 'trusted') {
         Set-Content -LiteralPath $notice -Value $configPath
         $why = if ($trust -eq 'changed') { 'wpf-render.json 在授权后被修改过' } else { '这个项目还没有授权' }
         $trustScript = Join-Path $PSScriptRoot '..\scripts\trust-project.ps1'
-        [ordered]@{ systemMessage = "wpf-offscreen-render：$configPath 启用了结束前自动验证，但$why，本次跳过。确认信任后运行：pwsh -File `"$([IO.Path]::GetFullPath($trustScript))`" -Path `"$configPath`"" } |
+        [ordered]@{ systemMessage = "wpf-offscreen-render：$configPath 启用了结束前自动验证，但$why，本次跳过。确认信任后运行：pwsh -ExecutionPolicy Bypass -File `"$([IO.Path]::GetFullPath($trustScript))`" -Path `"$configPath`"" } |
             ConvertTo-Json -Compress
     }
     exit 0

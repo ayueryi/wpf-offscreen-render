@@ -26,11 +26,13 @@ static int Images(CallToolResult result) => result.Content.OfType<ImageContentBl
 static JsonNode? Json(CallToolResult result) =>
     result.Content.OfType<TextContentBlock>().FirstOrDefault() is { } block && block.Text.TrimStart().StartsWith('{') ? JsonNode.Parse(block.Text) : null;
 
+// 使用 Claude Code 插件清单中的真实启动命令（${CLAUDE_PLUGIN_ROOT} 替换为仓库根目录），确保测试覆盖用户实际执行的命令行。
+var server = JsonNode.Parse(File.ReadAllText(Path.Combine(root, ".claude-plugin", "plugin.json")))!["mcpServers"]!["wpf-offscreen-render"]!;
 await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
 {
     Name = "wpf-offscreen-render",
-    Command = "pwsh",
-    Arguments = ["-NoProfile", "-File", Path.Combine(root, "mcp", "start.ps1")],
+    Command = server["command"]!.GetValue<string>(),
+    Arguments = server["args"]!.AsArray().Select(arg => arg!.GetValue<string>().Replace("${CLAUDE_PLUGIN_ROOT}", root)).ToList(),
 }));
 
 var toolList = await client.ListToolsAsync();

@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "pwsh",
-            "args": ["-NoProfile", "-NonInteractive", "-File", "${CLAUDE_PLUGIN_ROOT}/hooks/verify-on-stop.ps1"],
+            "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/hooks/verify-on-stop.ps1"],
             "timeout": 900
           }
         ]

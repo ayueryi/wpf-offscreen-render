@@ -113,6 +113,7 @@ foreach ($argument in $arguments) { $startInfo.ArgumentList.Add($argument) }
 $process = [Diagnostics.Process]::new()
 $process.StartInfo = $startInfo
 $exitCode = 1
+$stage = 'render'
 try {
     $null = $process.Start()
     $stdout = $process.StandardOutput.ReadToEndAsync()
@@ -122,7 +123,8 @@ try {
         if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
             $process.Kill($true)
             $process.WaitForExit()
-            [IO.File]::WriteAllText((Join-Path $outDir 'error.txt'), "渲染子进程超过 $TimeoutSeconds 秒，已终止。")
+            [IO.File]::WriteAllText((Join-Path $outDir 'error.txt'), "渲染子进程超过 $TimeoutSeconds 秒，已终止（检查 WaitUntilReadyAsync 是否在等待永不完成的信号，或调大 -TimeoutSeconds）。")
+            $stage = 'timeout'
             break
         }
     }
@@ -131,4 +133,4 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $outDir 'error.txt'))) { $exitCode = $process.ExitCode }
 }
 finally { $process.Dispose() }
-Complete-Render $exitCode 'render'
+Complete-Render $exitCode $stage
