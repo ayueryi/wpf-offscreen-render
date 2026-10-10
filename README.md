@@ -8,7 +8,7 @@
 - 不依赖任何 Gallery、业务框架或特定 UI 库；只需要 .NET 8+ WPF 与 PowerShell 7。
 - 仓库本身也是一个 Agent Skill（`SKILL.md`），可直接放入 `.agents/skills/` 供 Codex / Claude Code 等代理调用。
 
-| light（layout-only，| 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 |6 DPI） | dark（layout-only，96 DPI） |
+| light（layout-only，96 DPI） | dark（layout-only，96 DPI） |
 | --- | --- |
 | ![light](docs/images/sample-light.png) | ![dark](docs/images/sample-dark.png) |
 
@@ -42,7 +42,7 @@
 | --- | --- |
 | 操作系统 | Windows（WPF 仅支持 Windows；`-WindowHost` 还需要交互式桌面会话） |
 | Shell | PowerShell 7+（`pwsh`），脚本带 `#requires -Version 7.0` |
-| .NET SDK | 能构建目标 TFM 的 SDK，例如 .NET 8 / | 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 | / 10 SDK |
+| .NET SDK | 能构建目标 TFM 的 SDK，例如 .NET 8 / 9 / 10 SDK |
 | 运行时 | 与目标 TFM 匹配的 `Microsoft.WindowsDesktop.App` |
 | 目标程序 | .NET 8 及以上 WPF。旧 .NET Framework 项目不能直接引用，需要另建 net48 宿主（流程可参照本工具） |
 
@@ -59,7 +59,7 @@ $PSVersionTable.PSVersion
 ## 快速开始
 
 ```powershell
-git clone <本仓库地址> wpf-offscreen-render
+git clone https://github.com/ayueryi/wpf-offscreen-render.git
 cd wpf-offscreen-render
 
 # 1. 在 %TEMP% 下生成一个独立的临时渲染工程（自带可运行样例）
@@ -117,7 +117,7 @@ flowchart LR
    - `layout-only`：不创建窗口，直接 `Measure` / `Arrange` / `UpdateLayout`。
    - `window-host`：用 `Window` 承载（或直接使用工厂返回的 `Window`），放到屏幕外 `(-20000, -20000)`，`ShowActivated=false`、`ShowInTaskbar=false`、`WindowStyle=None`、`ResizeMode=NoResize`，然后 `Show()`，截取 `Window.Content`。
 5. `await ViewFactory.WaitUntilReadyAsync(view)` 等待业务就绪信号，再跑一轮 `ContextIdle` + `UpdateLayout`。
-6. `RenderTargetBitmap(ceil(W×DPI/| 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 |6), ceil(H×DPI/96), DPI, DPI, Pbgra32)` 渲染并编码 PNG。
+6. `RenderTargetBitmap(ceil(W×DPI/96), ceil(H×DPI/96), DPI, DPI, Pbgra32)` 渲染并编码 PNG。
 7. 写出 `manifest.json`、`binding-errors.txt`；调用 `ViewFactory.Cleanup`、关闭自己创建的窗口，然后以退出码结束进程。
 
 执行器 `invoke-wpf-render.ps1` 只负责：构建（可跳过）→ 以独立子进程启动宿主 → 超时控制 → 收集 stdout / stderr 日志 → 回传退出码与输出目录。它**只会终止自己启动的渲染子进程**。
@@ -172,13 +172,13 @@ wpf-offscreen-render/
 | `-HarnessDir` | string | **必填** | — | `new-wpf-harness.ps1` 返回的 `WorkDir` |
 | `-Width` | int | `1280` | 1–6000 | 视口宽度（DIP） |
 | `-Height` | int | `800` | 1–6000 | 视口高度（DIP） |
-| `-Dpi` | int | `| 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 |6` | 48–384 | 输出位图 DPI，决定像素尺寸 |
+| `-Dpi` | int | `96` | 48–384 | 输出位图 DPI，决定像素尺寸 |
 | `-Theme` | string | `light` | `light` / `dark` | 仅作为字符串传给 `ViewFactory.Create`，真实主题由工厂负责应用 |
 | `-WindowHost` | switch | 关 | — | 使用屏外窗口承载 |
 | `-NoBuild` | switch | 关 | — | 跳过 `dotnet build`；仅在代码和引用都未变化时使用 |
 | `-TimeoutSeconds` | int | `120` | 5–600 | 渲染子进程超时；超时会结束该子进程并写 `error.txt` |
 
-额外保护：输出像素总数超过 6000 万（例如 6000×6000 DIP @ 1| 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 |2 DPI）时直接拒绝执行。
+额外保护：输出像素总数超过 6000 万（例如 6000×6000 DIP @ 192 DPI）时直接拒绝执行。
 
 ---
 
@@ -217,8 +217,8 @@ wpf-offscreen-render/
   "theme": "dark",
   "widthDip": 640,
   "heightDip": 260,
-  "pixelWidth": | 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 |60,
-  "pixelHeight": 3| 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 |0,
+  "pixelWidth": 960,
+  "pixelHeight": 390,
   "dpi": 144,
   "actualWidthDip": 640,
   "actualHeightDip": 260,
@@ -359,7 +359,7 @@ Invoke-Item (Join-Path $outDir 'snapshot.png')
 ## 尺寸与 DPI
 
 - `-Width` / `-Height` 单位是 **DIP**（与 WPF 布局一致），默认 1280×800。
-- PNG 像素 = `ceil(DIP × DPI / | 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 |6)`。例：640×360 DIP、144 DPI → 960×540 像素。
+- PNG 像素 = `ceil(DIP × DPI / 96)`。例：640×360 DIP、144 DPI → 960×540 像素。
 - `-Dpi` 只控制输出分辨率，**不模拟**真实多显示器 DPI 切换；依赖 `VisualTreeHelper.GetDpi` / HWND DPI 的代码需在真实显示环境另测。
 - `ScrollViewer` 默认只截视口。想看完整内容，可给更大的固定高度，或在生成工程里定制截取根节点；固定高度只用于视觉检查。
 - 虚拟化列表中未实例化的项不会因截图出现。可以用小规模数据，或**仅在临时宿主里**关闭虚拟化 / 分页；不要为截图修改业务行为。
