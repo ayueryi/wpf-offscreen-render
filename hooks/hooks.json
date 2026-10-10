@@ -1,0 +1,17 @@
+{
+  "description": "业务项目的 wpf-render.json 设置 verifyOnStop 时，结束本轮前渲染受影响的 WPF 视图，有渲染失败或绑定错误时让代理继续修复",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh",
+            "args": ["-NoProfile", "-NonInteractive", "-File", "${CLAUDE_PLUGIN_ROOT}/hooks/verify-on-stop.ps1"],
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}

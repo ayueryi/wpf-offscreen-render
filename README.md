@@ -139,6 +139,10 @@ wpf-offscreen-render/
 ├── skills/wpf-offscreen-render/
 │   ├── SKILL.md                  # Agent Skill：何时用、怎么调用、如何读结果
 │   └── agents/openai.yaml        # Codex 显示名、默认提示与依赖
+├── hooks/
+│   ├── hooks.json                # Claude Code 插件的 Stop hook
+│   └── verify-on-stop.ps1        # 结束前渲染受影响视图（业务项目 wpf-render.json 启用时）
+├── templates/                    # 业务项目接入：wpf-render.json、AGENTS.md / CLAUDE.md 规则、Codex hook
 ├── mcp/
 │   ├── start.ps1                 # MCP 服务器启动器：首次运行时编译到本机缓存
 │   ├── invoke-script.ps1         # 服务器调用 scripts/ 的桥接
@@ -251,6 +255,12 @@ codex plugin marketplace add ayueryi/wpf-offscreen-render
 ```
 
 Codex 不用插件时可执行 `codex mcp add wpf-offscreen-render -- pwsh -NoProfile -NonInteractive -File C:\tools\wpf-offscreen-render\mcp\start.ps1`。需要工作流说明时，再把 `skills\wpf-offscreen-render` 复制或联接到代理的 skills 目录（Claude Code：`.claude\skills\`；Codex：`.agents\skills\`）；skill 中引用的脚本与文档路径以克隆位置为准。
+
+### 接入业务项目
+
+1. 把 [templates/wpf-render.json](templates/wpf-render.json) 复制到业务仓库根目录，登记要验证的视图（程序集、视图类型、DataContext 来源、主题 / 尺寸、构建命令、`watch` 文件模式），字段说明见 [integration.md](references/integration.md#业务项目接入wpf-renderjson)。
+2. 把 [templates/agent-rules.md](templates/agent-rules.md) 的内容加入业务仓库的 `AGENTS.md` 或 `CLAUDE.md`。
+3. `verifyOnStop: true` 时，Claude Code 插件自带的 Stop hook 会在代理结束本轮前渲染改动涉及的视图，有渲染失败或绑定错误时让代理继续修复。Codex 需要按 [templates/codex-hooks.json](templates/codex-hooks.json) 在 `.codex/hooks.json` 中配置，并在 `/hooks` 中信任它（未在真实 Codex 中验证）。
 
 ### 安装后自检
 

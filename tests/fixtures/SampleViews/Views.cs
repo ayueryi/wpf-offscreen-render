@@ -13,6 +13,20 @@ namespace SampleViews
         public string Status => "Shipped";
     }
 
+    // 没有无参构造：只能经 dataContextFactory 静态工厂方法或自定义 ViewFactory 创建。
+    public sealed class RemoteOrderVm
+    {
+        public RemoteOrderVm(string title) { Title = title; }
+        public string Title { get; }
+        public string Customer => "Fabrikam 股份有限公司";
+        public string Status => "Pending";
+    }
+
+    public static class PreviewData
+    {
+        public static RemoteOrderVm CreateRemoteOrder() => new RemoteOrderVm("Order #2048");
+    }
+
     public class OrderView : UserControl
     {
         public OrderView()
