@@ -7,7 +7,7 @@
 - 修改 `*.xaml`、`*.xaml.cs`、视图模型、样式或资源字典后，必须渲染受影响的视图再结束：
   调用 MCP 工具 `render_view`，参数 `config` 为本仓库根目录的绝对路径、`preset` 为视图名、`build: true`；
   不确定视图名时先调用 `list_views`。没有 MCP 工具时运行
-  `pwsh -File <wpf-offscreen-render>/scripts/render.ps1 -Config . -Preset <视图名> -Build`。
+  `pwsh -ExecutionPolicy Bypass -File <wpf-offscreen-render>/scripts/render.ps1 -Config . -Preset <视图名> -Build`。
 - 修改前若需要对比，先渲染一次作为基线；修改后用 `compare_snapshots` 对比，确认变化只出现在预期区域。
 - 结论以 JSON 摘要为准：`status` 不是 `ok` 时必须修复；`bindingIssues` 逐条处理；`layoutIssues` 逐条对照截图确认，属于预期的在回复中说明。
 - 在回复中给出：渲染的视图、主题 / 尺寸、绑定与布局检查结论、截图路径，以及未覆盖的内容（Popup、原生控件、交互、性能）。

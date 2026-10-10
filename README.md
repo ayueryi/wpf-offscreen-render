@@ -1,7 +1,7 @@
 # WPF Offscreen Render
 
 [![CI](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml/badge.svg)](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-1.1.0-blue)
+![version](https://img.shields.io/badge/version-1.1.1-blue)
 ![.NET](https://img.shields.io/badge/WPF-.NET%20Framework%204.7.2%20%E2%80%93%20.NET%2010-512BD4)
 
 让 AI 编码代理（Codex、Claude Code 等）**亲眼看到**自己改出来的 WPF 界面：在独立的临时进程里把真实的 `UserControl` / `Page` / `Window` 渲染成 PNG，并给出解析好的绑定错误和布局问题。
@@ -66,13 +66,13 @@ codex plugin marketplace add ayueryi/wpf-offscreen-render
   "mcpServers": {
     "wpf-offscreen-render": {
       "command": "pwsh",
-      "args": ["-NoProfile", "-NonInteractive", "-File", "C:\\tools\\wpf-offscreen-render\\mcp\\start.ps1"]
+      "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\tools\\wpf-offscreen-render\\mcp\\start.ps1"]
     }
   }
 }
 ```
 
-Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh -NoProfile -NonInteractive -File C:\tools\wpf-offscreen-render\mcp\start.ps1`。需要工作流说明时，再把 `skills\wpf-offscreen-render` 复制到代理的 skills 目录（Claude Code：`.claude\skills\`；Codex：`.agents\skills\`）。
+Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\tools\wpf-offscreen-render\mcp\start.ps1`。需要工作流说明时，再把 `skills\wpf-offscreen-render` 复制到代理的 skills 目录（Claude Code：`.claude\skills\`；Codex：`.agents\skills\`）。
 
 ### 验证安装
 
@@ -122,7 +122,7 @@ Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh
 3. **结束前自动验证**：`wpf-render.json` 里设置 `"verifyOnStop": true`，然后在本机授权这个项目：
 
    ```powershell
-   pwsh -File <插件或克隆目录>\scripts\trust-project.ps1 -Path C:\work\MyApp
+   pwsh -ExecutionPolicy Bypass -File <插件或克隆目录>\scripts\trust-project.ps1 -Path C:\work\MyApp
    ```
 
    Claude Code 插件自带的 Stop hook 会在代理结束本轮前，渲染 `watch` 命中改动的视图；有渲染失败或绑定错误时阻止结束，让代理继续修复。同一份改动只验证一次。hook 会执行配置中的 `build` 命令并运行业务程序集，所以**只对授权过的项目生效**；授权记录保存在本机（不在仓库里），`wpf-render.json` 被修改后需要重新授权，未授权时 hook 只提示一次如何授权。Codex 需要按 [templates/codex-hooks.json](templates/codex-hooks.json) 自行配置（尚未在真实 Codex 中验证）。

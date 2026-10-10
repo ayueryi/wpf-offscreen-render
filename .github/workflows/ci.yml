@@ -25,6 +25,16 @@ jobs:
         shell: pwsh
         run: ./tests/run-tests.ps1 -ArtifactsDir "${{ runner.temp }}\wpf-render-tests"
 
+      - name: MCP under AllSigned execution policy
+        # 模拟公司策略 / 带“来自网络”标记的安装：未签名脚本只有在启动参数带 -ExecutionPolicy Bypass 时才能运行。
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy AllSigned -Force
+          $effective = Get-ExecutionPolicy
+          if ($effective -ne 'AllSigned') { throw "生效的执行策略是 $effective，无法验证 AllSigned 场景" }
+          dotnet run --project mcp/WpfRenderMcp.Tests -c Release -- --root .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload render artifacts
         if: always()
         uses: actions/upload-artifact@v5
@@ -57,7 +67,7 @@ jobs:
 
       - name: Validate Claude Code plugin
         run: |
-          npm install -g @anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code@2.1.296  # 固定版本，避免校验规则变化让 CI 无故变红
           claude plugin validate --strict .claude-plugin/plugin.json
           claude plugin validate --strict .
           claude plugin validate --strict skills
