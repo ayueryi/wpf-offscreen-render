@@ -4,7 +4,8 @@
 
 - 不启动业务程序，不抢焦点，不弹窗口，不出现在任务栏。
 - 使用真实控件、真实样式、确定的样例数据，而不是手绘 mock。
-- 每次渲染附带 `manifest.json`（尺寸 / DPI / SHA256 / 绑定统计）和 `binding-errors.txt`，绑定错误直接体现在退出码上。
+- 每次渲染附带 `manifest.json`（尺寸 / DPI / SHA256 / 绑定统计）和 `binding-errors.txt`，绑定错误直接体现在退出码上；执行器最后打印 JSON 摘要（`summary.json`），一次调用即可拿到结论。
+- 常见页面免写代码：`-ViewType` / `-Xaml` + `-ResourceDictionary`（支持 `{theme}` 占位）直接渲染业务控件。
 - 不依赖任何 Gallery、业务框架或特定 UI 库；只需要 .NET 8+ WPF 与 PowerShell 7。
 - 仓库本身也是一个 Agent Skill（`SKILL.md`），可直接放入 `.agents/skills/` 供 Codex / Claude Code 等代理调用。
 
@@ -84,7 +85,7 @@ Invoke-Item (Join-Path $outDir 'snapshot.png')
 & .\scripts\invoke-wpf-render.ps1 -HarnessDir $harness.WorkDir -WindowHost -Width 1100 -Height 760
 ```
 
-渲染**真实页面**前，需要修改生成工程中的 `ViewFactory.cs`，见 [接入真实界面](#接入真实界面)。
+渲染**真实页面**：简单页面用生成器的 `-ViewType` / `-Xaml` 参数即可，复杂页面修改生成工程中的 `ViewFactory.cs`，见 [接入真实界面](#接入真实界面)。
 
 ---
 
@@ -134,7 +135,8 @@ wpf-offscreen-render/
 │   └── openai.yaml               # Codex 等代理的显示名与默认提示
 ├── assets/                       # 渲染宿主模板，生成器原样复制到临时工程
 │   ├── Program.cs                # STA 宿主：绑定监听、布局、RenderTargetBitmap、manifest
-│   └── ViewFactory.cs            # 唯一需要按目标页面修改的文件（样例实现）
+│   ├── ConfiguredView.cs         # 读取 harness.json：按类型名 / 松散 XAML 创建视图、合并资源字典
+│   └── ViewFactory.cs            # 需要定制时唯一要改的文件（默认先走 harness.json，再走样例）
 ├── scripts/
 │   ├── new-wpf-harness.ps1       # 生成临时渲染工程
 │   └── invoke-wpf-render.ps1     # 构建 + 渲染 + 收集产物
@@ -153,19 +155,25 @@ wpf-offscreen-render/
 
 ### `scripts/new-wpf-harness.ps1`
 
-生成一个新的 `RenderHarness` 工程，返回 `[pscustomobject]@{ WorkDir; ProjectPath }`。
+生成一个新的 `RenderHarness` 工程，返回 `[pscustomobject]@{ WorkDir; ProjectPath; ConfigPath }`。
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `-TargetFramework` | string | `net8.0-windows` | 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 |
 | `-WorkDir` | string | `%TEMP%\wpf-render-<GUID>` | 工程目录；**已存在则拒绝覆盖** |
 | `-AssemblyPath` | string[] | 空 | 要引用的业务 DLL，必须是 `.dll`；以 `HintPath` + `Private=true` 写入 csproj（路径做 XML 转义，可含空格） |
+| `-ViewType` | string | 空 | 要渲染的 View 类型（完整名或程序集限定名），需有无参构造；与 `-Xaml` 二选一 |
+| `-Xaml` | string | 空 | 松散 XAML 文件（无 `x:Class` / 事件），可经 `clr-namespace;assembly=` 引用业务控件 |
+| `-DataContextType` | string | 空 | 用无参构造创建并设为 View 的 `DataContext` |
+| `-ResourceDictionary` | string[] | 空 | 按顺序合并的资源字典（pack URI 或绝对路径），`{theme}` 替换为 `-Theme` 的值 |
+
+视图参数写入 `harness.json`，渲染时才读取；之后修改它或 XAML 文件只需 `-NoBuild` 重新渲染。工程同时写入空的 `Directory.Build.props` / `.targets` 与关闭集中包管理的 `Directory.Packages.props`，放在业务仓库里也不会继承上层构建配置。
 
 生成的 csproj 关键属性：`OutputType=Exe`、`UseWPF=true`、`ImplicitUsings`、`Nullable`、`UseAppHost=false`（通过 `dotnet RenderHarness.dll` 启动）。
 
 ### `scripts/invoke-wpf-render.ps1`
 
-构建并渲染一次，输出目录路径写入管道，退出码写入 `$LASTEXITCODE`。
+构建（输出到工程内 `out\`）并渲染一次，打印 JSON 摘要，输出目录路径写入管道，退出码写入 `$LASTEXITCODE`。
 
 | 参数 | 类型 | 默认值 | 范围 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -176,6 +184,7 @@ wpf-offscreen-render/
 | `-Theme` | string | `light` | `light` / `dark` | 仅作为字符串传给 `ViewFactory.Create`，真实主题由工厂负责应用 |
 | `-WindowHost` | switch | 关 | — | 使用屏外窗口承载 |
 | `-NoBuild` | switch | 关 | — | 跳过 `dotnet build`；仅在代码和引用都未变化时使用 |
+| `-Background` | string | `auto` | `auto` / `transparent` / `#RRGGBB` / `#AARRGGBB` / 颜色名 | PNG 衬底。`auto`：业务窗口或被样式设置过的窗口背景优先，否则 light→白、dark→`#1E1E1E`；避免透明 PNG 在查看器中显示为黑底 |
 | `-TimeoutSeconds` | int | `120` | 5–600 | 渲染子进程超时；超时会结束该子进程并写 `error.txt` |
 
 额外保护：输出像素总数超过 6000 万（例如 6000×6000 DIP @ 192 DPI）时直接拒绝执行。
@@ -206,6 +215,7 @@ wpf-offscreen-render/
 | `build.log` | 未使用 `-NoBuild` | `dotnet build` 完整输出 |
 | `render.stdout.log` / `render.stderr.log` | 子进程启动后 | 宿主标准输出 / 错误 |
 | `error.txt` | 失败时 | 异常堆栈、自检失败或超时说明 |
+| `summary.json` | 总是 | 结论摘要：`status`（`ok` / `binding-issues` / `failed:build` / `failed:locate` / `failed:render`）、`snapshot`、`sourceViewType`、尺寸、衬底、前 5 条绑定问题、编译错误、异常前 15 行；同时打印到控制台 |
 
 `manifest.json` 示例（640×260 DIP、144 DPI、window-host、dark）：
 
@@ -222,6 +232,8 @@ wpf-offscreen-render/
   "dpi": 144,
   "actualWidthDip": 640,
   "actualHeightDip": 260,
+  "background": "#FF1E1E1E",
+  "backgroundSource": "theme-fallback",
   "bindingTraceVerified": true,
   "bindingWarningOrErrorCount": 0,
   "image": "snapshot.png",
@@ -243,6 +255,7 @@ wpf-offscreen-render/
 | `actualWidthDip` / `actualHeightDip` | 根元素布局后的实际尺寸；与请求不一致说明有约束或布局问题 |
 | `bindingTraceVerified` | 绑定监听自检是否命中；`false` 时绑定统计不可信 |
 | `bindingWarningOrErrorCount` | 真实绑定问题条数（排除自检标记） |
+| `background` / `backgroundSource` | 实际衬底颜色与来源（`window` / `theme-fallback` / `explicit` / `transparent`）；衬底不代表业务背景 |
 | `sha256` | PNG 字节哈希，用于快速判断是否完全一致 |
 | `exitCode` | 最终退出码 |
 
@@ -285,7 +298,20 @@ $harness = & .\scripts\new-wpf-harness.ps1 `
 - Costura / 单文件发布的程序，引用普通构建产物；生产 App 的自定义程序集加载器不会在宿主中自动注册。
 - 不要对生产输出目录做覆盖或全量清理。
 
-### 2. 修改生成工程中的 `ViewFactory.cs`
+### 2a. 免代码：类型名 / 松散 XAML
+
+View 与 DataContext 有无参构造、资源只需按顺序合并字典、无需等待异步就绪时：
+
+```powershell
+$harness = & .\scripts\new-wpf-harness.ps1 -AssemblyPath $myUiDll `
+    -ViewType MyUi.Views.OrderView -DataContextType MyUi.Preview.OrderPreviewVm `
+    -ResourceDictionary '/MyUi;component/Themes/Generic.xaml', '/MyUi;component/Themes/{theme}.xaml'
+& .\scripts\invoke-wpf-render.ps1 -HarnessDir $harness.WorkDir -Theme dark
+```
+
+改用 `-Xaml probe.xaml` 可渲染松散 XAML（无 `x:Class` / 事件，业务控件经 `clr-namespace:...;assembly=MyUi` 引用）。其余情况用 2b。
+
+### 2b. 定制：修改生成工程中的 `ViewFactory.cs`
 
 `ViewFactory` 有三个钩子，签名不要改：
 
@@ -405,6 +431,7 @@ $after  = Get-Content (Join-Path $outDir 'manifest.json') -Raw | ConvertFrom-Jso
 
 | 现象 | 优先检查 |
 | --- | --- |
+| `找不到类型`（harness.json 模式） | 类型名是否含完整命名空间、程序集是否在 `-AssemblyPath` 中 |
 | 编译缺类型、加载程序集失败 | TFM、DLL / NuGet 版本、运行时依赖与内容文件；看 `build.log` / `error.txt` |
 | `ResourceReferenceKeyNotFoundException` / `XamlParseException` | 资源合并顺序、pack URI、Theme bootstrap；看内层异常 |
 | 空白图或 `actual*Dip` 为 0 | Measure / Arrange、Visibility、返回的根元素；是否依赖 `Loaded`（改用 `-WindowHost`） |

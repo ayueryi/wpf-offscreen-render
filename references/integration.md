@@ -13,9 +13,27 @@ $harness = & "$skillRoot\scripts\new-wpf-harness.ps1" `
                   'C:\work\MyApp\bin\Debug\net8.0-windows\MyUi.dll'
 ```
 
-这些路径只是示例，先确认实际程序集名称、版本、输出位置。生成器使用 XML 转义写入 HintPath，路径含空格可正常使用。需要额外 NuGet 包、ProjectReference 或依赖 DLL 时修改生成的 `RenderHarness.csproj`。引用 DLL 并不保证所有运行时依赖、native DLL、内容文件都被复制；按错误补齐明确需要的依赖，保留它们的相对目录。不要对生产输出目录做覆盖或全量清理。
+这些路径只是示例，先确认实际程序集名称、版本、输出位置。生成器使用 XML 转义写入 HintPath，路径含空格可正常使用。生成的工程自带隔离用的 `Directory.Build.props` / `.targets` / `Directory.Packages.props`，因此 `-WorkDir` 即使放在业务仓库内，也不会继承上层构建配置。需要额外 NuGet 包、ProjectReference 或依赖 DLL 时修改生成的 `RenderHarness.csproj`。引用 DLL 并不保证所有运行时依赖、native DLL、内容文件都被复制；按错误补齐明确需要的依赖，保留它们的相对目录。不要对生产输出目录做覆盖或全量清理。
 
 如果只需要公开的 View 类型，优先 DLL 引用以避免业务项目构建前后的副作用。需要自动跟随源码时才使用 ProjectReference，注意目标项目的构建事件。存在 Costura / 单文件发布时，优先业务项目普通构建产物；生产 App 的程序集加载器通常不会在独立宿主里自动注册。
+
+## 免代码接入：harness.json
+
+满足以下条件时，不必修改 `ViewFactory.cs`：View 和 DataContext 都有无参构造（可以是 non-public），资源只需要按顺序合并字典，并且不需要等待异步就绪。
+
+```powershell
+$harness = & "$skillRoot\scripts\new-wpf-harness.ps1" -AssemblyPath $myUiDll `
+    -ViewType MyUi.Views.OrderView `
+    -DataContextType MyUi.Preview.OrderPreviewVm `
+    -ResourceDictionary '/MyUi;component/Themes/Generic.xaml', '/MyUi;component/Themes/{theme}.xaml'
+```
+
+- `-ViewType` / `-DataContextType`：可以写完整类型名（会在已加载程序集和输出目录的 DLL 中查找），也可以写程序集限定名 `Ns.Type, Assembly`。
+- `-Xaml`：松散 XAML 文件，与 `-ViewType` 二选一。不能写 `x:Class` 和事件处理器；业务控件通过 `xmlns:v="clr-namespace:MyUi.Views;assembly=MyUi"` 引用，对应程序集需在 `-AssemblyPath` 中。适合快速拼一个探针布局或组合多个控件。
+- `-ResourceDictionary`：按给定顺序合并到 `Application.Current.Resources`。支持 pack URI 或磁盘绝对路径，`{theme}` 替换为 `-Theme` 的值。
+- 这些参数都写入生成工程的 `harness.json`，渲染时才读取。修改它或 XAML 文件后，可以直接 `-NoBuild` 再渲染。
+
+超出上述条件时（VM 需要参数或 stub 服务、需要 Bootstrap、需要等待加载完成或设置选中态），按下文修改 `ViewFactory.cs`。默认的 `ViewFactory.Create` 会先尝试 `harness.json`，未配置视图时才走样例。整体替换 `ViewFactory.cs` 后，`harness.json` 中的视图配置就不再生效。
 
 ## 资源、主题和 DataContext
 
