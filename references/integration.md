@@ -27,7 +27,7 @@ $harness | Select-Object TargetFramework, Platform
 
 ## 免代码接入：harness.json
 
-满足以下条件时，不必修改 `ViewFactory.cs`：View 和 DataContext 都有无参构造（可以是 non-public），资源只需要按顺序合并字典，并且不需要等待异步就绪。
+满足以下条件时，不必修改 `ViewFactory.cs`：View 和 DataContext 都有无参构造（可以是 non-public），资源只需要按顺序合并字典，并且不需要等待异步就绪。这种情况优先用 `scripts/render.ps1` 一步渲染：参数与下例相同，宿主会被缓存，程序集未变时跳过构建。
 
 ```powershell
 $harness = & "$skillRoot\scripts\new-wpf-harness.ps1" -AssemblyPath $myUiDll `

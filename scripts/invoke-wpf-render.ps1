@@ -32,6 +32,12 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
     $manifest = if (Test-Path -LiteralPath $manifestPath) { Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json } else { $null }
     $snapshot = Join-Path $outDir 'snapshot.png'
     $buildLog = Join-Path $outDir 'build.log'
+    $readJson = { param($name) $p = Join-Path $outDir $name; if (Test-Path -LiteralPath $p) { Get-Content -LiteralPath $p -Raw | ConvertFrom-Json } }
+    # 绑定问题优先用宿主解析后的单行结论（目标元素.属性 <- 路径（数据源）：原因），旧宿主回退到原始日志。
+    $bindingJson = & $readJson 'binding-errors.json'
+    $bindingIssues = if ($null -ne $bindingJson) { @(@($bindingJson) | Select-Object -First 5 | ForEach-Object summary) } else { @(& $read 'binding-errors.txt' 5) }
+    $layout = & $readJson 'layout.json'
+    $layoutIssues = @(@($layout.issues) | Where-Object { $_ } | Select-Object -First 10 | ForEach-Object { "[$($_.kind)] $($_.element)：$($_.message)" })
     $buildErrors = @(if ($Stage -eq 'build' -and (Test-Path -LiteralPath $buildLog)) {
         @(Select-String -LiteralPath $buildLog -Pattern ': error ' | Select-Object -First 10 | ForEach-Object { $_.Line.Trim() } | Select-Object -Unique)
     })
@@ -48,7 +54,9 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
         background = $manifest.background
         bindingTraceVerified = $manifest.bindingTraceVerified
         bindingIssueCount = $manifest.bindingWarningOrErrorCount
-        bindingIssues = @(& $read 'binding-errors.txt' 5)
+        bindingIssues = $bindingIssues
+        layoutIssueCount = $manifest.layoutIssueCount
+        layoutIssues = $layoutIssues
         buildErrors = $buildErrors
         error = @(& $read 'error.txt' 15)
     }

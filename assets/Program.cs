@@ -110,6 +110,17 @@ internal static class Program
                 encoder.Frames.Add(BitmapFrame.Create(bitmap));
                 using (var stream = File.Create(pngPath)) encoder.Save(stream);
                 listener.Flush();
+                // 布局检查只提供线索，不影响退出码；检查本身出错时记录原因，不让渲染失败。
+                int? layoutIssueCount = null;
+                string? layoutReportError = null;
+                try
+                {
+                    var (layout, issueCount) = LayoutReport.Inspect(root, width, height, dpi / 96.0);
+                    File.WriteAllText(Path.Combine(outDir, "layout.json"), Json.Write(layout));
+                    layoutIssueCount = issueCount;
+                }
+                catch (Exception ex) { layoutReportError = ex.GetType().Name + ": " + ex.Message; }
+
                 string sha256;
                 using (var sha = SHA256.Create())
                     sha256 = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(pngPath))).Replace("-", "").ToLowerInvariant();
@@ -125,6 +136,8 @@ internal static class Program
                     new("actualWidthDip", root.ActualWidth), new("actualHeightDip", root.ActualHeight),
                     new("background", background?.ToString() ?? "transparent"), new("backgroundSource", backgroundSource),
                     new("bindingTraceVerified", listener.SelfCheckHit),
+                    new("layoutIssueCount", layoutIssueCount),
+                    new("layoutReportError", layoutReportError),
                     new("image", "snapshot.png"),
                     new("sha256", sha256),
                     new("targetFramework", typeof(Program).Assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName),
@@ -157,12 +170,13 @@ internal static class Program
                 }
                 PresentationTraceSources.DataBindingSource.Listeners.Remove(listener);
                 File.WriteAllLines(Path.Combine(outDir, "binding-errors.txt"), listener.Errors);
+                File.WriteAllText(Path.Combine(outDir, "binding-errors.json"), Json.Write(listener.Errors.Select(BindingIssues.Describe).ToList()));
                 if (exitCode == 0 && listener.Errors.Count > 0) exitCode = 2;
                 if (manifest is not null)
                 {
                     manifest.Add(new("bindingWarningOrErrorCount", listener.Errors.Count));
                     manifest.Add(new("exitCode", exitCode));
-                    File.WriteAllText(Path.Combine(outDir, "manifest.json"), ToJson(manifest));
+                    File.WriteAllText(Path.Combine(outDir, "manifest.json"), Json.Write(manifest));
                 }
                 Console.WriteLine($"{outDir} (exit={exitCode})");
                 app.Shutdown(exitCode);
@@ -184,43 +198,6 @@ internal static class Program
                 > BaseValueSource.DefaultStyleTrigger))
             return (windowBrush, "window");
         return (theme == "dark" ? new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E)) : Brushes.White, "theme-fallback");
-    }
-
-    // 仅覆盖 manifest 用到的值类型：字符串、数字、布尔与 null。
-    private static string ToJson(List<KeyValuePair<string, object?>> fields)
-    {
-        static string Quote(string value)
-        {
-            var builder = new StringBuilder("\"");
-            foreach (var c in value)
-            {
-                switch (c)
-                {
-                    case '"': builder.Append("\\\""); break;
-                    case '\\': builder.Append("\\\\"); break;
-                    case '\n': builder.Append("\\n"); break;
-                    case '\r': builder.Append("\\r"); break;
-                    case '\t': builder.Append("\\t"); break;
-                    default:
-                        if (c < ' ') builder.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
-                        else builder.Append(c);
-                        break;
-                }
-            }
-            return builder.Append('"').ToString();
-        }
-        static string Format(object? value) => value switch
-        {
-            null => "null",
-            bool b => b ? "true" : "false",
-            string text => Quote(text),
-            double d when double.IsNaN(d) || double.IsInfinity(d) => "null",
-            double d => d.ToString("R", CultureInfo.InvariantCulture),
-            IFormattable number => number.ToString(null, CultureInfo.InvariantCulture),
-            _ => Quote(value.ToString() ?? "")
-        };
-        var lines = fields.Select(field => $"  {Quote(field.Key)}: {Format(field.Value)}");
-        return "{" + Environment.NewLine + string.Join("," + Environment.NewLine, lines) + Environment.NewLine + "}";
     }
 
     private static async Task IdleAsync()

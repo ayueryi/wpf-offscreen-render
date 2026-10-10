@@ -11,9 +11,21 @@ $manifest | Select-Object mode, theme, widthDip, heightDip, pixelWidth, pixelHei
 Get-Content -LiteralPath (Join-Path $outDir 'binding-errors.txt')
 ```
 
-使用当前代理可用的图片工具（如 Codex 的 `view_image`）查看真实 PNG。确认没有空白 / 全透明图、裁切、文字重叠、缺失图标、主题资源失效或意外占位状态。manifest 与退出码只能证明生成和监听结果，不能替代图片检查。
+先读 `summary.json`：`bindingIssues` 是解析后的单行绑定结论，`layoutIssues` 是自动布局检查的前 10 条。再使用当前代理可用的图片工具（如 Codex 的 `view_image`）查看真实 PNG。确认没有空白 / 全透明图、裁切、文字重叠、缺失图标、主题资源失效或意外占位状态。manifest 与退出码只能证明生成和监听结果，不能替代图片检查。
 
 绑定监听在构造目标 View 前启用，先制造唯一错误绑定验证采集有效，仅过滤该标记。退出码：0=渲染与监听通过且无真实绑定问题，1=构建 / 渲染 / 监听自检失败，2=真实绑定告警或错误。绑定问题仍会保留 PNG 方便排查。未生成 manifest / PNG 的失败应看 build.log、error.txt、render.stderr.log；不应该描述为“视觉通过”。
+
+## 布局检查
+
+`layout.json` 的 `issues` 由宿主在截图后遍历视觉树得出，只检查内容元素（有文本的 `TextBlock`、有图像的 `Image`、`Control`）：
+
+- `text-truncated`：用元素自身的字体与字号测量文本，宽度（不换行）或高度（换行）超过可用空间。已设置 `TextTrimming` 的会注明“已显示省略号”；这是否可接受由业务决定。
+- `clipped`：父容器的布局空间小于元素需要的尺寸，元素被裁掉一部分。`ScrollViewer` 视口、`ClipToBounds`、显式 `Clip` 属于有意裁切，不报告。
+- `overlap`：两段文本的字形区域重叠超过较小者面积的 15%。常见原因是同一 `Grid` 单元格、负边距或 `Canvas` 定位冲突。
+- `zero-size`：有内容的元素宽或高为 0，通常是固定尺寸、`*` 行列分配为 0 或父容器被压缩。
+- `out-of-viewport`：可见部分超出渲染视口；可能是视口太小，也可能是页面真的溢出，换更大的 `-Width` / `-Height` 再渲染区分。
+
+这些是线索，不影响退出码。逐条对照 PNG 确认后再修改；确认属于有意设计的，在报告中说明即可。需要定位某个元素时，在 `layout.json` 的 `nodes` 中按 `name` 或 `text` 查 `rect`（相对根元素的 DIP 坐标 `[x, y, w, h]`）。检查不覆盖：颜色对比度、图标缺失、字形回退、Popup / 原生窗口内容，以及 `Visibility` 非 `Visible` 的元素。
 
 ## 视觉基线
 
