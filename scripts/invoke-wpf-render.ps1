@@ -10,6 +10,8 @@ param(
     [ValidatePattern('^(auto|transparent|#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})|[A-Za-z]+)$')]
     [string]$Background = 'auto',
     [switch]$WindowHost,
+    # 另存该 x:Name 元素的截图为 element.png（整页 snapshot.png 照常生成）。
+    [string]$Element,
     [switch]$NoBuild,
     [ValidateRange(5,600)][int]$TimeoutSeconds = 120
 )
@@ -46,6 +48,8 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
         exitCode = $ExitCode
         outDir = $outDir
         snapshot = if (Test-Path -LiteralPath $snapshot) { $snapshot } else { $null }
+        elementSnapshot = if (Test-Path -LiteralPath (Join-Path $outDir 'element.png')) { Join-Path $outDir 'element.png' } else { $null }
+        elementRectDip = $manifest.elementRectDip
         sourceViewType = $manifest.sourceViewType
         mode = $manifest.mode
         theme = $Theme
@@ -101,6 +105,7 @@ $startInfo.RedirectStandardError = $true
 $configPath = Join-Path $HarnessDir 'harness.json'
 if (Test-Path -LiteralPath $configPath) { $arguments += '--config', $configPath }
 if ($WindowHost) { $arguments += '--window-host' }
+if ($Element) { $arguments += '--element', $Element }
 foreach ($argument in $arguments) { $startInfo.ArgumentList.Add($argument) }
 $process = [Diagnostics.Process]::new()
 $process.StartInfo = $startInfo

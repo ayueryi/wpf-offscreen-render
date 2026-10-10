@@ -32,31 +32,44 @@ Get-Content -LiteralPath (Join-Path $outDir 'binding-errors.txt')
 同一 View 的前后比较应保持机器、字体、资源版本、样例数据、视口、主题、DPI 与动画状态一致。每次使用新输出目录，避免把旧图误当本次结果。
 
 ```powershell
-$before = Get-Content -LiteralPath (Join-Path $baselineDir 'manifest.json') -Raw | ConvertFrom-Json
-$after = Get-Content -LiteralPath (Join-Path $outDir 'manifest.json') -Raw | ConvertFrom-Json
-[pscustomobject]@{
-    SameHash = $before.sha256 -eq $after.sha256
-    BeforeImage = Join-Path $baselineDir 'snapshot.png'
-    AfterImage = Join-Path $outDir 'snapshot.png'
-}
+& "$skillRoot\scripts\compare-snapshots.ps1" -Before $baselineDir -After $outDir
+# status same / different，changedRatio、changedBoundsDip（对照 layout.json 定位元素），差异图 diff.png（变化像素标红）
 ```
 
-SHA256 相等说明 PNG 字节相同；变化不自动等于回归。并排看前后图，必要时用可用图像比较工具生成差异图，结合修改目的判断。字体渲染与机器环境变化可能造成像素差异，不能用一个全局阈值替代判断。不要自动覆盖用户认可的基线。
+- `environmentDifferences` 非空时（主题、DPI、运行时、机器等不同），像素差异可能来自渲染条件，先统一条件再比较。
+- `same` 说明像素一致；`different` 不自动等于回归，结合差异图与修改目的判断。字体渲染、系统更新、显卡驱动都可能带来像素差异，`-Tolerance` 只用于忽略抗锯齿级别的微小差别，不能代替判断。
+- 基线保存在用户选定的稳定目录；生成新基线前保留旧基线，不要自动覆盖用户认可的基线，临时产物不要提交进业务仓库。
 
 ## 故障定位
 
 | 现象 | 优先检查 |
 | --- | --- |
-| 编译缺类型、加载程序集失败 | TFM、DLL / NuGet 版本、运行时依赖和内容文件，查看 build.log / error.txt |
-| ResourceReferenceKeyNotFound / XamlParseException | 资源合并顺序、pack URI、Theme bootstrap、内层异常 |
-| 空白或布局为零 | Measure / Arrange、Visibility、返回根元素；是否依赖 Loaded，需要 WindowHost |
-| 样式正确但数据缺失 | 实际 DataContext、Binding.Path、异步完成信号，查看 binding-errors.txt |
-| 监听自检未命中 | PresentationTraceSources.Refresh、日志注册时机；不要把空日志当没有绑定错误 |
-| 截图停在加载中 | WaitUntilReadyAsync 是否等真实任务；不能仅靠 ContextIdle |
-| 窗口出现在屏幕或弹对话框 | Loaded / 构造函数自身行为，停止该次验证并隔离副作用，不扩大启动范围 |
-| 原生视口或菜单没出现 | HwndHost airspace / Popup 独立窗口限制，选对应组件导出或独立捕获 |
-| 重复输出不稳定 | 主题静态状态、动画、时间、随机数据、字体、异步任务未就绪 |
-| 构建输出锁定 | 使用独立 harness / 临时输出；不擅自终止用户运行中的业务程序 |
+| `找不到类型`（harness.json 模式） | 类型名是否含完整命名空间、程序集是否在 `-AssemblyPath` 中 |
+| 编译缺类型、加载程序集失败 | TFM、DLL / NuGet 版本、运行时依赖与内容文件；看 `build.log` / `error.txt` |
+| `ResourceReferenceKeyNotFoundException` / `XamlParseException` | 资源合并顺序、pack URI、Theme bootstrap；看内层异常 |
+| 空白图或 `actual*Dip` 为 0 | Measure / Arrange、Visibility、返回的根元素；是否依赖 `Loaded`（改用 `-WindowHost`） |
+| 样式正确但数据缺失 | 实际 `DataContext`、`Binding.Path`、异步完成信号；看 `binding-errors.txt` |
+| `bindingTraceVerified=false` | `PresentationTraceSources.Refresh`、监听注册时机；**不要把空日志当成没有绑定错误** |
+| 截图停在“加载中” | `WaitUntilReadyAsync` 是否在等真实任务，而不是 `ContextIdle` |
+| 窗口出现在屏幕上 / 弹出对话框 | 构造函数或 `Loaded` 的自身行为；停止本次验证并隔离副作用 |
+| 原生视口或菜单缺失 | 见下方[已知限制](#已知限制) |
+| 多次输出不稳定 | 主题静态状态、动画、当前时间、随机数据、字体、异步未就绪 |
+| 构建输出被锁定 | 使用独立 harness / 临时输出；不要擅自结束正在运行的业务程序 |
+| 超时（`error.txt` 提示超过 N 秒） | 就绪信号永不完成、UI 线程被同步阻塞；必要时调大 `-TimeoutSeconds` 定位 |
+
+## 已知限制
+
+| 限制 | 原因 / 替代方案 |
+| --- | --- |
+| `Popup`、`ToolTip`、`ContextMenu` 不出现在快照里 | 它们在独立的呈现源（独立 HWND）中；需在定制宿主中对其 `Child` 单独渲染 |
+| `HwndHost`、`WindowsFormsHost`、WebView、HALCON 等 native 视口为空白 | WPF / HWND airspace 限制，`RenderTargetBitmap` 不捕获 native 内容；使用组件自身的图像导出接口，或获授权后做实际窗口捕获。**不要把 native 空白判定为回归** |
+| 不含系统窗口边框和阴影 | 只截 `Window.Content`；业务自绘标题栏属于内容，会被截到 |
+| 不能证明性能 | `RenderTargetBitmap` 成功不代表页面切换不卡；性能需单独计时，见下方“性能验证边界” |
+| 不能证明交互 | 快照不覆盖输入、焦点、键盘导航 |
+| `-WindowHost` 需要桌面会话 | 无交互会话的服务或 CI 代理可能失败 |
+| .NET Core 3.x 程序 | 只支持 .NET Framework 4.7.2+ 与 .NET 5+ 宿主；3.x 程序集需升级，或显式 `-TargetFramework net5.0-windows` 等后自行验证兼容性 |
+| 混用 .NET Framework 与 .NET 程序集 | 一个进程只能承载一种运行时，生成器会拒绝；分别生成宿主 |
+| WinUI / UWP | 本工具针对 WPF 的 `System.Windows.Media.Imaging.RenderTargetBitmap`，与 WinUI / UWP 同名 API 无关 |
 
 ## 性能验证边界
 
