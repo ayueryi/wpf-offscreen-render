@@ -1,0 +1,95 @@
+using System.Text.Json.Nodes;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+
+// 用法：dotnet run --project mcp/WpfRenderMcp.Tests -- --root <仓库根目录> [--sample <SampleViews.dll>]
+// 经 mcp/start.ps1 启动服务器（与代理的 MCP 配置相同），逐项调用工具并断言结果。
+string? Option(string name)
+{
+    var index = Array.IndexOf(args, name);
+    return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+}
+var root = Path.GetFullPath(Option("--root") ?? throw new ArgumentException("缺少 --root"));
+var sample = Option("--sample");
+var failures = new List<string>();
+var passed = 0;
+
+void Check(string name, bool condition, string detail = "")
+{
+    if (condition) { passed++; Console.WriteLine($"PASS {name}"); }
+    else { failures.Add(name); Console.WriteLine($"FAIL {name} {detail}"); }
+}
+
+static string Texts(CallToolResult result) => string.Join("\n", result.Content.OfType<TextContentBlock>().Select(block => block.Text));
+static int Images(CallToolResult result) => result.Content.OfType<ImageContentBlock>().Count();
+// 第一个文本块是 JSON 摘要。
+static JsonNode? Json(CallToolResult result) =>
+    result.Content.OfType<TextContentBlock>().FirstOrDefault() is { } block && block.Text.TrimStart().StartsWith('{') ? JsonNode.Parse(block.Text) : null;
+
+await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+{
+    Name = "wpf-offscreen-render",
+    Command = "pwsh",
+    Arguments = ["-NoProfile", "-File", Path.Combine(root, "mcp", "start.ps1")],
+}));
+
+var tools = (await client.ListToolsAsync()).Select(tool => tool.Name).OrderBy(name => name).ToArray();
+Check("tools/list", tools.SequenceEqual(new[] { "compare_snapshots", "get_layout", "render_matrix", "render_view", "self_test" }), string.Join(",", tools));
+
+async Task<CallToolResult> Call(string tool, Dictionary<string, object?> arguments) =>
+    await client.CallToolAsync(tool, arguments);
+
+var missing = await Call("get_layout", new() { ["outDir"] = Path.Combine(root, "no-such-render") });
+Check("get_layout 缺少目录时报错", missing.IsError == true && Texts(missing).Contains("layout.json"), Texts(missing));
+
+if (!OperatingSystem.IsWindows())
+{
+    var refused = await Call("render_view", new());
+    Check("非 Windows 时 render_view 明确拒绝", refused.IsError == true && Texts(refused).Contains("Windows"), Texts(refused));
+}
+else
+{
+    var basic = await Call("render_view", new() { ["width"] = 640, ["height"] = 360 });
+    Check("render_view 内置样例：ok 且带截图", basic.IsError != true && Json(basic)?["status"]?.GetValue<string>() == "ok" && Images(basic) == 1, Texts(basic));
+
+    if (sample is not null)
+    {
+        var problems = await Call("render_view", new()
+        {
+            ["assemblyPaths"] = new[] { sample }, ["viewType"] = "SampleViews.LayoutProblemsView", ["element"] = "ClippedButton", ["dpi"] = 144,
+        });
+        var summary = Json(problems);
+        Check("render_view 业务视图：布局问题 5 条，截图与元素截图各一", problems.IsError != true
+            && summary?["layoutIssueCount"]?.GetValue<int>() == 5 && Images(problems) == 2, Texts(problems));
+
+        var outDir = summary?["outDir"]?.GetValue<string>() ?? "";
+        var layout = Json(await Call("get_layout", new() { ["outDir"] = outDir, ["element"] = "ClippedButton", ["kind"] = "overlap" }));
+        Check("get_layout 按元素与类型筛选", layout?["issueCount"]?.GetValue<int>() == 1 && (layout?["matchedNodes"] as JsonArray)?.Count > 0, layout?.ToJsonString() ?? "");
+
+        var broken = await Call("render_view", new()
+        {
+            ["assemblyPaths"] = new[] { sample }, ["viewType"] = "SampleViews.BrokenBindingView", ["dataContextType"] = "SampleViews.OrderPreviewVm",
+        });
+        Check("render_view 绑定错误：binding-issues 且给出结论", broken.IsError != true
+            && Json(broken)?["status"]?.GetValue<string>() == "binding-issues" && Texts(broken).Contains("Path=CustomerNmae"), Texts(broken));
+    }
+
+    var matrix = await Call("render_matrix", new() { ["themes"] = new[] { "light", "dark" }, ["sizes"] = new[] { "640x360" } });
+    var matrixJson = Json(matrix);
+    Check("render_matrix：两个组合与总览图", matrix.IsError != true && matrixJson?["rendered"]?.GetValue<int>() == 2 && Images(matrix) == 1, Texts(matrix));
+
+    var results = matrixJson?["results"] as JsonArray;
+    if (results is { Count: 2 })
+    {
+        var compare = await Call("compare_snapshots", new() { ["before"] = results[0]!["outDir"]!.GetValue<string>(), ["after"] = results[1]!["outDir"]!.GetValue<string>() });
+        var comparison = Json(compare);
+        Check("compare_snapshots：明暗主题判为不同并附差异图", comparison?["status"]?.GetValue<string>() == "different"
+            && Texts(compare).Contains("theme: light -> dark") && Images(compare) == 1, Texts(compare));
+    }
+
+    var selfTest = await Call("self_test", new());
+    Check("self_test 通过", selfTest.IsError != true && Texts(selfTest).Contains("0 失败"), Texts(selfTest));
+}
+
+Console.WriteLine($"{passed} 通过，{failures.Count} 失败");
+return failures.Count == 0 ? 0 : 1;
