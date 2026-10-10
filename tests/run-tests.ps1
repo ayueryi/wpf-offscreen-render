@@ -21,7 +21,7 @@ $comparer = Join-Path $root 'scripts\compare-snapshots.ps1'
 $fixtures = Join-Path $PSScriptRoot 'fixtures'
 $userArtifacts = [bool]$ArtifactsDir
 if (-not $ArtifactsDir) { $ArtifactsDir = Join-Path ([IO.Path]::GetTempPath()) ('wpf-render-tests-' + [guid]::NewGuid().ToString('N')) }
-$ArtifactsDir = [IO.Path]::GetFullPath($ArtifactsDir)
+$ArtifactsDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ArtifactsDir)
 # 生成器拒绝覆盖已有工程目录，复用非空目录会让用例误报失败。
 if ((Test-Path -LiteralPath $ArtifactsDir) -and (Get-ChildItem -LiteralPath $ArtifactsDir -Force | Select-Object -First 1)) {
     throw "产物目录非空：$ArtifactsDir"
@@ -74,6 +74,7 @@ $cases = @(
     @{ Name = 'render-matrix'; Kind = 'Matrix' }
     @{ Name = 'cache-cleanup'; Kind = 'CacheCleanup' }
     @{ Name = 'compare-snapshots'; Kind = 'Compare' }
+    @{ Name = 'global-json-isolation'; Kind = 'GlobalJson' }
     @{ Name = 'mcp-server'; Kind = 'Mcp' }
     @{ Name = 'factory-method'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.OrderView'; DataContextFactory = 'SampleViews.PreviewData.CreateRemoteOrder' }
         Expect = @{ exitCode = 0; status = 'ok'; layoutText = 'Order #2048' } }
@@ -83,6 +84,8 @@ $cases = @(
     @{ Name = 'stop-hook'; Kind = 'Hook' }
     @{ Name = 'net8-element'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'ClippedButton'; Dpi = 144 }
         Expect = @{ exitCode = 0; elementWidthDip = 300; elementPixelWidth = 450 } }
+    @{ Name = 'net8-element-offset'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.CenteredView' }; Render = @{ Element = 'CenteredButton' }
+        Expect = @{ exitCode = 0; elementRectDip = '450,310,100,30' } }
     @{ Name = 'net8-element-missing'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'NoSuchElement' }
         Expect = @{ exitCode = 1; errorPattern = 'ClippedButton' } }
     @{ Name = 'net472-view'; Sample = 'net472'; Generate = @{ ViewType = 'SampleViews.OrderView'; DataContextType = 'SampleViews.OrderPreviewVm' }
@@ -112,8 +115,13 @@ function Get-PngWidth([string]$Path) {
 function Test-CacheCleanup($case) {
     $failures = [Collections.Generic.List[string]]::new()
     $cacheRoot = Join-Path $ArtifactsDir "$($case.Name)-cache"
-    $busy = 'test' + [guid]::NewGuid().ToString('N').Substring(0, 12)
-    $idle = 'test' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+    # 缓存目录名为 16 位十六进制；无关目录（名称不符或没有 cache.json）即使很旧也不能删除。
+    $busy = [guid]::NewGuid().ToString('N').Substring(0, 16)
+    $idle = [guid]::NewGuid().ToString('N').Substring(0, 16)
+    $foreign = Join-Path $cacheRoot 'unrelated-data'
+    $null = New-Item -ItemType Directory -Path $foreign -Force
+    Set-Content -LiteralPath (Join-Path $foreign 'keep.txt') -Value 1
+    (Get-Item -LiteralPath $foreign).LastWriteTime = (Get-Date).AddDays(-30)
     foreach ($name in $busy, $idle) {
         $dir = Join-Path $cacheRoot $name
         $null = New-Item -ItemType Directory -Path $dir -Force
@@ -132,6 +140,7 @@ function Test-CacheCleanup($case) {
         $null = & $oneStep -Width 320 -Height 200 -CacheRoot $cacheRoot 6> $null
         if (-not (Test-Path -LiteralPath (Join-Path $cacheRoot $busy))) { $failures.Add('正在使用的过期缓存被删除了') }
         if (Test-Path -LiteralPath (Join-Path $cacheRoot $idle)) { $failures.Add('空闲的过期缓存没有被删除') }
+        if (-not (Test-Path -LiteralPath (Join-Path $foreign 'keep.txt'))) { $failures.Add('缓存根目录下的无关目录被删除了') }
     }
     finally { Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue }
     $failures
@@ -152,6 +161,23 @@ function Test-Matrix($case) {
     if ($built.Count -ne 1) { $failures.Add("期望只构建一次，实际 $($built.Count) 次") }
     $pixel = @($matrix.results | Where-Object dpi -eq 144 | ForEach-Object { Get-PngWidth $_.snapshot } | Select-Object -Unique)
     if ("$pixel" -ne '960') { $failures.Add("144 DPI 截图宽度期望 960，实际 $pixel") }
+    $failures
+}
+
+# 业务仓库锁定了本机没有的 SDK（global.json）：在该仓库目录下运行时，宿主仍应使用本机 SDK 构建。
+function Test-GlobalJson($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $repo = Join-Path $ArtifactsDir "$($case.Name)-repo"
+    $null = New-Item -ItemType Directory -Path $repo
+    Set-Content -LiteralPath (Join-Path $repo 'global.json') -Value '{ "sdk": { "version": "6.0.100", "rollForward": "disable" } }'
+    Push-Location -LiteralPath $repo
+    try {
+        $harness = & $generator -WorkDir (Join-Path $repo 'harness')
+        $outDir = & $renderer -HarnessDir $harness.WorkDir -Width 320 -Height 200 6> $null
+        $summary = Get-Content -LiteralPath (Join-Path "$outDir" 'summary.json') -Raw | ConvertFrom-Json
+        if ($summary.status -ne 'ok') { $failures.Add("期望 ok，实际 $($summary.status)：$(@($summary.buildErrors) + @($summary.error) -join '; ')") }
+    }
+    finally { Pop-Location }
     $failures
 }
 
@@ -198,7 +224,9 @@ function New-PresetProject([string]$Name) {
         }
         views = [ordered]@{
             Order = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextFactory = 'SampleViews.PreviewData.CreateRemoteOrder'; watch = @('src/Order/**') }
-            Broken = [ordered]@{ viewType = 'SampleViews.BrokenBindingView'; dataContextType = 'SampleViews.OrderPreviewVm'; watch = @('src/Broken/*.txt') }
+            # src/Broken/**/*.txt 也应匹配 src/Broken 下的直接子文件（** 可为零层目录）。
+            Broken = [ordered]@{ viewType = 'SampleViews.BrokenBindingView'; dataContextType = 'SampleViews.OrderPreviewVm'; watch = @('src/Broken/**/*.txt') }
+            Sized = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextType = 'SampleViews.OrderPreviewVm'; sizes = @('800x600', '1024x768') }
             Themes = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextType = 'SampleViews.OrderPreviewVm'; themes = @('light', 'dark') }
         }
     }
@@ -219,6 +247,16 @@ function Test-Preset($case) {
     $wide = & $oneStep -Config (Join-Path $dir 'wpf-render.json') -Preset Order -Width 900 -CacheRoot $cache 6> $null
     $wideSummary = Get-Content -LiteralPath (Join-Path "$wide" 'summary.json') -Raw | ConvertFrom-Json
     if ($wideSummary.pixelSize -ne '900x360') { $failures.Add("显式 -Width 应覆盖预设：$($wideSummary.pixelSize)") }
+    # 显式 -Width 覆盖预设的 sizes（高度仍取预设默认值），显式 -Xaml 覆盖预设的 viewType。
+    $sized = & $oneStep -Config $dir -Preset Sized -Width 700 -CacheRoot $cache 6> $null
+    $sizedSummary = Get-Content -LiteralPath (Join-Path "$sized" 'summary.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+    if ($sizedSummary.pixelSize -ne '700x360') { $failures.Add("显式 -Width 应覆盖预设 sizes：$($sizedSummary.pixelSize)（$sized）") }
+    try {
+        $xamlRun = & $oneStep -Config $dir -Preset Order -Xaml (Join-Path $fixtures 'ok.xaml') -CacheRoot $cache 6> $null
+        $xamlSummary = Get-Content -LiteralPath (Join-Path "$xamlRun" 'summary.json') -Raw | ConvertFrom-Json
+        if ($xamlSummary.status -ne 'ok') { $failures.Add("显式 -Xaml 覆盖预设 viewType 后应渲染成功：$($xamlSummary.status)") }
+    }
+    catch { $failures.Add("显式 -Xaml 应覆盖预设 viewType：$($_.Exception.Message)") }
     $themes = & $oneStep -Config $dir -Preset Themes -CacheRoot $cache 6> $null
     $matrix = Get-Content -LiteralPath (Join-Path "$themes" 'matrix.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
     if ($matrix.rendered -ne 2) { $failures.Add("Themes 预设应渲染 2 个组合：$($matrix.rendered)") }
@@ -232,7 +270,8 @@ function Test-Preset($case) {
 # Stop hook：改动 watch 覆盖的文件后，绑定错误阻止结束；同一份改动不重复拦截；改动正常视图时放行。
 function Test-Hook($case) {
     $failures = [Collections.Generic.List[string]]::new()
-    $dir = New-PresetProject $case.Name
+    # 中文目录：hook 的输入（cwd）与 git 输出必须按 UTF-8 解码，否则找不到 wpf-render.json、匹配不到改动。
+    $dir = New-PresetProject "$($case.Name)-中文目录"
     foreach ($file in 'src/Order/a.txt', 'src/Broken/b.txt') {
         $path = Join-Path $dir $file
         $null = New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force
@@ -278,7 +317,8 @@ function Test-Hook($case) {
     Add-Content -LiteralPath (Join-Path $dir 'wpf-render.json') -Value ' '
     Set-Content -LiteralPath (Join-Path $dir 'src/Broken/b.txt') -Value 'v3'
     $changed = (((@{ cwd = $dir; session_id = "$session-changed" } | ConvertTo-Json -Compress) | & pwsh -NoProfile -NonInteractive -File $hook) -join '').Trim()
-    if ($changed -like '*"decision"*' -or $changed -notlike '*修改*') { $failures.Add("配置修改后应要求重新授权：$changed") }
+    $changedNotice = try { $changed | ConvertFrom-Json } catch { $null }
+    if ($changedNotice.decision -or $changedNotice.systemMessage -notlike '*修改*') { $failures.Add("配置修改后应要求重新授权：$changed") }
     }
     finally { $env:WPF_RENDER_TRUST_FILE = $previousTrust }
     $failures
@@ -354,6 +394,9 @@ function Test-Case($case) {
             }
             'elementWidthDip' {
                 if ("$(@($manifest.elementRectDip)[2])" -ne "$expected") { $failures.Add("元素宽度期望 $expected，实际 $(@($manifest.elementRectDip)[2])") }
+            }
+            'elementRectDip' {
+                if ((@($manifest.elementRectDip) -join ',') -ne $expected) { $failures.Add("元素矩形期望 $expected，实际 $(@($manifest.elementRectDip) -join ',')") }
             }
             'elementPixelWidth' {
                 $width = if ($summary.elementSnapshot) { Get-PngWidth $summary.elementSnapshot }

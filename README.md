@@ -1,7 +1,7 @@
 # WPF Offscreen Render
 
 [![CI](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml/badge.svg)](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-1.1.1-blue)
+![version](https://img.shields.io/badge/version-1.1.2-blue)
 ![.NET](https://img.shields.io/badge/WPF-.NET%20Framework%204.7.2%20%E2%80%93%20.NET%2010-512BD4)
 
 让 AI 编码代理（Codex、Claude Code 等）**亲眼看到**自己改出来的 WPF 界面：在独立的临时进程里把真实的 `UserControl` / `Page` / `Window` 渲染成 PNG，并给出解析好的绑定错误和布局问题。
@@ -38,7 +38,7 @@
 
 ## 安装到代理
 
-**前提**：Windows 本机，已安装 PowerShell 7（`pwsh`）与 .NET 8 或更高版本的 SDK。MCP 服务器首次启动时会编译到 `%LOCALAPPDATA%\wpf-offscreen-render\mcp`，需要几秒钟，之后直接启动。首次编译需要访问 NuGet；离线或内网环境的做法见 [verification.md](references/verification.md#离线与内网环境)。
+**前提**：Windows 本机，已安装 PowerShell 7（`pwsh`）与 .NET 8 或更高版本的 SDK。MCP 服务器首次启动时会编译到 `%LOCALAPPDATA%\wpf-offscreen-render\mcp`，之后直接启动。冷启动的首次编译（含 NuGet 还原）可能超过客户端的 MCP 启动超时，建议安装后先预热一次：`pwsh -ExecutionPolicy Bypass -File <插件目录>\mcp\start.ps1 -BuildOnly`（Claude Code 也可以用环境变量 `MCP_TIMEOUT` 调大超时）。首次编译需要访问 NuGet；离线或内网环境的做法见 [verification.md](references/verification.md#离线与内网环境)。
 
 ### Claude Code
 
@@ -111,7 +111,7 @@ Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh
 }
 ```
 
-`status` 为 `ok` / `binding-issues` / `failed:<阶段>`。布局问题只是线索，不影响 `status`，由代理对照截图确认。完整字段见 [references/cli.md](references/cli.md)。
+`status` 为 `ok` / `binding-issues` / `failed:<阶段>`（多组合渲染的汇总为 `ok` / `binding-issues` / `failed`）。布局问题只是线索，不影响 `status`，由代理对照截图确认。完整字段见 [references/cli.md](references/cli.md)。
 
 ## 接入业务项目
 

@@ -8,7 +8,11 @@ $ErrorActionPreference = 'Stop'
 
 function Exit-Quietly { exit 0 }
 
-$hookInput = try { [Console]::In.ReadToEnd() | ConvertFrom-Json -AsHashtable } catch { $null }
+# hook 的输入输出都是 UTF-8；控制台默认代码页（中文 Windows 为 GBK）会把中文路径与提示变成乱码。
+# OutputEncoding 同时决定 pwsh 如何解码 git 等外部命令的输出。
+$utf8 = [Text.UTF8Encoding]::new($false)
+try { [Console]::OutputEncoding = $utf8 } catch { }
+$hookInput = try { [IO.StreamReader]::new([Console]::OpenStandardInput(), $utf8).ReadToEnd() | ConvertFrom-Json -AsHashtable } catch { $null }
 if ($null -eq $hookInput) { $hookInput = @{} }
 if (-not $IsWindows) { Exit-Quietly }
 $cwd = if ($hookInput.cwd) { $hookInput.cwd } else { (Get-Location).Path }
@@ -35,7 +39,7 @@ if ($trust -ne 'trusted') {
         $why = if ($trust -eq 'changed') { 'wpf-render.json 在授权后被修改过' } else { '这个项目还没有授权' }
         $trustScript = Join-Path $PSScriptRoot '..\scripts\trust-project.ps1'
         [ordered]@{ systemMessage = "wpf-offscreen-render：$configPath 启用了结束前自动验证，但$why，本次跳过。确认信任后运行：pwsh -ExecutionPolicy Bypass -File `"$([IO.Path]::GetFullPath($trustScript))`" -Path `"$configPath`"" } |
-            ConvertTo-Json -Compress
+            ConvertTo-Json -Compress -EscapeHandling EscapeNonAscii
     }
     exit 0
 }
@@ -43,18 +47,23 @@ if ($trust -ne 'trusted') {
 # 未提交的改动（含未跟踪文件），统一成正斜杠绝对路径。porcelain 输出中的路径相对于仓库根目录。
 $repoRoot = & git -C $dir rev-parse --show-toplevel 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $repoRoot) { Exit-Quietly }
-# core.quotepath=false：中文等非 ASCII 文件名不转义成八进制。
-$changed = @(& git -C $dir -c core.quotepath=false status --porcelain=v1 -uall 2>$null | ForEach-Object {
-        $path = $_.Substring(3)
-        if ($path -match ' -> ') { $path = ($path -split ' -> ')[-1] }
-        [IO.Path]::GetFullPath((Join-Path $repoRoot $path.Trim('"'))).Replace('\', '/')
-    })
+# -z：路径不加引号、不转义，记录以 NUL 分隔；重命名 / 复制记录后紧跟原路径，两者都算改动
+# （watch 覆盖的文件被移走同样可能破坏视图）。
+$records = ((& git -C $dir status --porcelain=v1 -z -uall 2>$null) -join "`n") -split "`0"
+$changed = @(for ($i = 0; $i -lt $records.Count; $i++) {
+        $record = $records[$i].Trim("`n")
+        if ($record.Length -lt 4) { continue }
+        $record.Substring(3)
+        if ($record[0] -in 'R', 'C') { $i++; if ($i -lt $records.Count) { $records[$i].Trim("`n") } }
+    }) | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath((Join-Path $repoRoot $_)).Replace('\', '/') }
+$changed = @($changed)
 if ($changed.Count -eq 0) { Exit-Quietly }
 
-# watch 模式相对于 wpf-render.json 所在目录：** 匹配任意层级，* 匹配单级，? 匹配单个字符。
+# watch 模式相对于 wpf-render.json 所在目录：** 匹配任意层级（含零层，src/**/*.xaml 也匹配 src/A.xaml），
+# * 匹配单级中的任意字符，? 匹配单个非分隔符字符。
 function ConvertTo-Regex([string]$Pattern) {
     $full = [IO.Path]::GetFullPath((Join-Path $dir $Pattern)).Replace('\', '/')
-    $escaped = [regex]::Escape($full) -replace '\\\*\\\*', '.*' -replace '\\\*', '[^/]*' -replace '\\\?', '.'
+    $escaped = [regex]::Escape($full) -replace '\\\*\\\*/', '(?:.*/)?' -replace '\\\*\\\*', '.*' -replace '\\\*', '[^/]*' -replace '\\\?', '[^/]'
     "^$escaped$"
 }
 $defaults = if ($config.defaults) { $config.defaults } else { @{} }
@@ -118,7 +127,7 @@ foreach ($name in $affected | Sort-Object) {
     [Text.UTF8Encoding]::new($false))
 if ($problems.Count -gt 0) {
     $reason = "WPF 渲染验证未通过（wpf-render.json：$configPath）。请修复后再结束；若确认属于预期，在回复中说明原因。`n" + ($problems -join "`n")
-    [ordered]@{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress
+    [ordered]@{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress -EscapeHandling EscapeNonAscii
     exit 0
 }
 Write-Output "WPF 渲染验证通过：$($passed -join '、')"

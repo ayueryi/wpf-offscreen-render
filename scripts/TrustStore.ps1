@@ -9,7 +9,7 @@ function Get-TrustStorePath {
 }
 
 function Get-ConfigIdentity([string]$ConfigPath) {
-    $full = (Resolve-Path -LiteralPath $ConfigPath).Path
+    $full = (Resolve-Path -LiteralPath $ConfigPath).ProviderPath
     [pscustomobject]@{
         Config = $full.Replace('\', '/')
         Sha256 = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash
