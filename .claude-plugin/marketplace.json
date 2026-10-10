@@ -1,0 +1,13 @@
+{
+  "name": "wpf-offscreen-render",
+  "owner": { "name": "ayueryi", "url": "https://github.com/ayueryi" },
+  "metadata": { "description": "WPF 离屏渲染插件" },
+  "plugins": [
+    {
+      "name": "wpf-offscreen-render",
+      "source": "./",
+      "description": "离屏渲染真实 WPF / XAML 界面为 PNG，返回截图、绑定错误与布局问题（需要 Windows）。",
+      "category": "development"
+    }
+  ]
+}
