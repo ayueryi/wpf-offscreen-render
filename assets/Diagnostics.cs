@@ -193,7 +193,8 @@ internal static class LayoutReport
         var trimming = textBlock.TextTrimming == TextTrimming.None ? "" : "（已显示省略号）";
         var bounds = new Rect(slot);
         // 各 Run 自带字号 / 字重 / 字体时，按 TextBlock 统一字体测量会误报或漏报，不检查截断。
-        var measurable = !HasStyledInlines(textBlock.Inlines);
+        var measurable = !HasStyledInlines(textBlock, textBlock.Inlines);
+        if (!double.IsNaN(textBlock.LineHeight)) formatted.LineHeight = textBlock.LineHeight;
         if (textBlock.TextWrapping == TextWrapping.NoWrap)
         {
             if (measurable && formatted.WidthIncludingTrailingWhitespace > available + Tolerance)
@@ -215,16 +216,15 @@ internal static class LayoutReport
         return new Rect(padding.Left + offset, padding.Top, inkWidth, Math.Min(formatted.Height, availableHeight));
     }
 
-    private static bool HasStyledInlines(InlineCollection inlines)
+    // 比较实际生效值：字体可能来自 Run 的本地值、Style 或 Bold / Italic 等元素。
+    private static bool HasStyledInlines(TextBlock textBlock, InlineCollection inlines)
     {
         foreach (var inline in inlines)
         {
-            if (inline.ReadLocalValue(TextElement.FontSizeProperty) != DependencyProperty.UnsetValue
-                || inline.ReadLocalValue(TextElement.FontWeightProperty) != DependencyProperty.UnsetValue
-                || inline.ReadLocalValue(TextElement.FontFamilyProperty) != DependencyProperty.UnsetValue
-                || inline.ReadLocalValue(TextElement.FontStyleProperty) != DependencyProperty.UnsetValue
-                || inline is Bold or Italic
-                || inline is Span span && HasStyledInlines(span.Inlines))
+            if (!inline.FontSize.Equals(textBlock.FontSize) || inline.FontWeight != textBlock.FontWeight
+                || inline.FontStyle != textBlock.FontStyle || !Equals(inline.FontFamily, textBlock.FontFamily)
+                || inline.FontStretch != textBlock.FontStretch
+                || inline is Span span && HasStyledInlines(textBlock, span.Inlines))
                 return true;
         }
         return false;

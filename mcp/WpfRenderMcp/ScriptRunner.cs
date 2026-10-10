@@ -9,6 +9,17 @@ public sealed class ScriptRunner(string root)
 {
     public string Root { get; } = root;
 
+    // Codex 等客户端以插件目录为工作目录启动服务器（Claude Code 则是项目目录）：此时相对路径没有意义。
+    public bool StartedInPluginRoot { get; } = IsSameOrInside(Environment.CurrentDirectory, root);
+
+    private static bool IsSameOrInside(string path, string root)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        return full.Equals(rootFull, comparison) || full.StartsWith(rootFull + Path.DirectorySeparatorChar, comparison);
+    }
+
     public sealed record Result(string[] Output, int ExitCode, string? Error, string StandardError);
 
     public async Task<Result> RunAsync(string relativeScript, Dictionary<string, object?> arguments, TimeSpan timeout,

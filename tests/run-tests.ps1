@@ -119,9 +119,13 @@ function Test-CacheCleanup($case) {
     $busy = [guid]::NewGuid().ToString('N').Substring(0, 16)
     $idle = [guid]::NewGuid().ToString('N').Substring(0, 16)
     $foreign = Join-Path $cacheRoot 'unrelated-data'
-    $null = New-Item -ItemType Directory -Path $foreign -Force
-    Set-Content -LiteralPath (Join-Path $foreign 'keep.txt') -Value 1
-    (Get-Item -LiteralPath $foreign).LastWriteTime = (Get-Date).AddDays(-30)
+    # 名称恰好是 16 位十六进制、但没有 cache.json / RenderHarness.csproj 的目录同样不属于本工具。
+    $hexForeign = Join-Path $cacheRoot ([guid]::NewGuid().ToString('N').Substring(0, 16))
+    foreach ($dir in $foreign, $hexForeign) {
+        $null = New-Item -ItemType Directory -Path $dir -Force
+        Set-Content -LiteralPath (Join-Path $dir 'keep.txt') -Value 1
+        (Get-Item -LiteralPath $dir).LastWriteTime = (Get-Date).AddDays(-30)
+    }
     foreach ($name in $busy, $idle) {
         $dir = Join-Path $cacheRoot $name
         $null = New-Item -ItemType Directory -Path $dir -Force
@@ -140,7 +144,9 @@ function Test-CacheCleanup($case) {
         $null = & $oneStep -Width 320 -Height 200 -CacheRoot $cacheRoot 6> $null
         if (-not (Test-Path -LiteralPath (Join-Path $cacheRoot $busy))) { $failures.Add('正在使用的过期缓存被删除了') }
         if (Test-Path -LiteralPath (Join-Path $cacheRoot $idle)) { $failures.Add('空闲的过期缓存没有被删除') }
-        if (-not (Test-Path -LiteralPath (Join-Path $foreign 'keep.txt'))) { $failures.Add('缓存根目录下的无关目录被删除了') }
+        foreach ($dir in $foreign, $hexForeign) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir 'keep.txt'))) { $failures.Add("缓存根目录下的无关目录被删除了：$dir") }
+        }
     }
     finally { Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue }
     $failures
@@ -221,11 +227,14 @@ function New-PresetProject([string]$Name) {
             assemblyPaths = @('bin/SampleViews.dll')
             build = @('dotnet', 'build', $sampleProject, '-f', 'net8.0-windows', '-c', 'Release', '-o', 'bin', '--nologo')
             width = 640; height = 360
+            # 视图写了 xaml 时不应继承这里的 viewType（见 Loose 预设）。
+            viewType = 'SampleViews.OrderView'
         }
         views = [ordered]@{
             Order = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextFactory = 'SampleViews.PreviewData.CreateRemoteOrder'; watch = @('src/Order/**') }
             # src/Broken/**/*.txt 也应匹配 src/Broken 下的直接子文件（** 可为零层目录）。
             Broken = [ordered]@{ viewType = 'SampleViews.BrokenBindingView'; dataContextType = 'SampleViews.OrderPreviewVm'; watch = @('src/Broken/**/*.txt') }
+            Loose = [ordered]@{ xaml = Join-Path $fixtures 'ok.xaml' }
             Sized = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextType = 'SampleViews.OrderPreviewVm'; sizes = @('800x600', '1024x768') }
             Themes = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextType = 'SampleViews.OrderPreviewVm'; themes = @('light', 'dark') }
         }
@@ -254,9 +263,15 @@ function Test-Preset($case) {
     try {
         $xamlRun = & $oneStep -Config $dir -Preset Order -Xaml (Join-Path $fixtures 'ok.xaml') -CacheRoot $cache 6> $null
         $xamlSummary = Get-Content -LiteralPath (Join-Path "$xamlRun" 'summary.json') -Raw | ConvertFrom-Json
-        if ($xamlSummary.status -ne 'ok') { $failures.Add("显式 -Xaml 覆盖预设 viewType 后应渲染成功：$($xamlSummary.status)") }
+        if ($xamlSummary.status -ne 'ok' -or $xamlSummary.sourceViewType -ne 'System.Windows.Controls.Border') {
+            $failures.Add("显式 -Xaml 应覆盖预设 viewType：$($xamlSummary.status) / $($xamlSummary.sourceViewType)")
+        }
+        # 视图层的 xaml 同样覆盖 defaults 中的 viewType。
+        $looseRun = & $oneStep -Config $dir -Preset Loose -CacheRoot $cache 6> $null
+        $looseSummary = Get-Content -LiteralPath (Join-Path "$looseRun" 'summary.json') -Raw | ConvertFrom-Json
+        if ($looseSummary.sourceViewType -ne 'System.Windows.Controls.Border') { $failures.Add("视图的 xaml 应覆盖 defaults 的 viewType：$($looseSummary.sourceViewType)") }
     }
-    catch { $failures.Add("显式 -Xaml 应覆盖预设 viewType：$($_.Exception.Message)") }
+    catch { $failures.Add("显式 -Xaml / 视图 xaml 应覆盖 viewType：$($_.Exception.Message)") }
     $themes = & $oneStep -Config $dir -Preset Themes -CacheRoot $cache 6> $null
     $matrix = Get-Content -LiteralPath (Join-Path "$themes" 'matrix.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
     if ($matrix.rendered -ne 2) { $failures.Add("Themes 预设应渲染 2 个组合：$($matrix.rendered)") }
@@ -302,7 +317,8 @@ function Test-Hook($case) {
     $decision = try { $first | ConvertFrom-Json } catch { $null }
     if ($decision.decision -ne 'block' -or $decision.reason -notlike '*CustomerNmae*') { $failures.Add("改动 Broken 后应阻止结束并给出绑定结论：$first") }
     $second = & $invoke
-    if ($second) { $failures.Add("同一份改动不应重复拦截：$second") }
+    # 只看输出为空不够：hook 崩溃时也没有标准输出。
+    if ($second -or $LASTEXITCODE -ne 0) { $failures.Add("同一份改动不应重复拦截：$second（退出码 $LASTEXITCODE）") }
 
     $null = & git -C $dir checkout -q -- src/Broken/b.txt 2>&1
     Set-Content -LiteralPath (Join-Path $dir 'src/Order/a.txt') -Value 'v2'
@@ -311,7 +327,7 @@ function Test-Hook($case) {
 
     $unrelated = @{ cwd = $ArtifactsDir; session_id = $session } | ConvertTo-Json -Compress
     $quiet = (($unrelated | & pwsh -NoProfile -NonInteractive -File $hook) -join '').Trim()
-    if ($quiet) { $failures.Add("没有 wpf-render.json 的目录应静默退出：$quiet") }
+    if ($quiet -or $LASTEXITCODE -ne 0) { $failures.Add("没有 wpf-render.json 的目录应静默退出：$quiet（退出码 $LASTEXITCODE）") }
 
     # 授权后修改配置（例如 build 命令）：授权失效，提示重新授权。
     Add-Content -LiteralPath (Join-Path $dir 'wpf-render.json') -Value ' '

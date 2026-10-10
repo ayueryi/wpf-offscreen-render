@@ -58,6 +58,7 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
         elementSnapshot = if (Test-Path -LiteralPath (Join-Path $outDir 'element.png')) { Join-Path $outDir 'element.png' } else { $null }
         elementRectDip = $manifest.elementRectDip
         elementError = $manifest.elementError
+        warning = $manifest.warning
         sourceViewType = $manifest.sourceViewType
         mode = $manifest.mode
         theme = $Theme
@@ -81,6 +82,10 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
 
 if (-not $NoBuild) {
     # dotnet 按当前目录查找 global.json：在宿主目录内构建，才会用到宿主自带的空 global.json，而不是业务仓库锁定的 SDK。
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        [IO.File]::WriteAllText((Join-Path $outDir 'error.txt'), '找不到 dotnet：需要安装 .NET 8 或更高版本的 SDK，并确保 dotnet 在 PATH 中。')
+        Complete-Render 1 'build'; return
+    }
     Push-Location -LiteralPath $HarnessDir
     try { & dotnet build $projectPath -c Debug --nologo -o $binDir *> (Join-Path $outDir 'build.log'); $buildCode = $LASTEXITCODE }
     finally { Pop-Location }
@@ -144,8 +149,11 @@ try {
             break
         }
     }
-    [IO.File]::WriteAllText((Join-Path $outDir 'render.stdout.log'), $stdout.GetAwaiter().GetResult())
-    [IO.File]::WriteAllText((Join-Path $outDir 'render.stderr.log'), $stderr.GetAwaiter().GetResult())
+    # 业务代码启动的子进程会继承输出管道：宿主退出后管道可能仍未关闭，读取不能无限等待。
+    foreach ($stream in @(@($stdout, 'render.stdout.log'), @($stderr, 'render.stderr.log'))) {
+        $text = if ($stream[0].Wait(5000)) { $stream[0].Result } else { '（输出管道仍被业务代码启动的子进程占用，未读取完）' }
+        [IO.File]::WriteAllText((Join-Path $outDir $stream[1]), $text)
+    }
     if (-not (Test-Path -LiteralPath (Join-Path $outDir 'error.txt'))) { $exitCode = $process.ExitCode }
 }
 finally { $process.Dispose() }

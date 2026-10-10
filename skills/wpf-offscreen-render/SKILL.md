@@ -7,7 +7,9 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
 
 在独立临时进程中创建 WPF Visual，通过 `RenderTargetBitmap` 输出 PNG；使用真实控件、真实样式和确定的样例数据，不依赖 Gallery 或生产程序的启动入口。渲染需要 Windows；云端 Linux 容器中的会话无法使用。
 
-下文的“插件根目录”是此 SKILL.md 上两级的目录（含 `mcp/`、`scripts/`、`references/`）。
+下文的“插件根目录”是此 SKILL.md 上两级的目录（含 `mcp/`、`scripts/`、`references/`）；若 skill 被单独复制到别处，以开头注明的仓库目录为准。
+
+**路径一律传绝对路径**：Codex 等客户端以插件目录为工作目录启动 MCP 服务器，相对路径会被拒绝；`preset` 需要同时传 `config`（业务项目根目录的绝对路径）。
 
 ## 调用方式
 
@@ -35,7 +37,7 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
 ## 操作流程
 
 1. 首次在某台机器上使用，或渲染异常怀疑是环境问题时，先调用 `self_test`（会构建两个宿主；通过时输出 `2 通过，0 失败`）。检查控件构造和 Loaded 是否触发硬件、网络或写入；用样例 ViewModel / stub 服务隔离这些行为。此 skill 不授予启动生产程序、连接设备或 Git 操作的权限。
-2. 业务项目根目录有 `wpf-render.json` 时，优先按预设渲染：先 `list_views`（`config` 为该目录），再 `render_view`（`config` + `preset`；修改了业务代码时加 `build: true`，由预设的 build 命令先构建）。预设的字段与 DataContext 的三种来源见 [integration.md](../../references/integration.md#业务项目接入wpf-renderjson)。没有预设时，修改业务 UI 后先构建业务项目，再调用 `render_view`：
+2. 业务项目根目录有 `wpf-render.json` 时，优先按预设渲染：先 `list_views`（`config` 为该目录的绝对路径），再 `render_view`（`config` + `preset`；修改了业务代码时加 `build: true`，由预设的 build 命令先构建）。预设的字段与 DataContext 的三种来源见 [integration.md](../../references/integration.md#业务项目接入wpf-renderjson)。没有预设时，修改业务 UI 后先构建业务项目，再调用 `render_view`：
    - `assemblyPaths`：业务程序集的绝对路径，优先指向应用（exe）的输出目录，那里依赖最全。TFM（.NET Framework 4.7.2 – 4.8.1 / .NET 5 – 10）与位数（x86 / x64）据此自动推断，不兼容时直接报错。
    - `viewType`（需无参构造）或 `xaml`（松散 XAML，无 `x:Class` / 事件，可经 `clr-namespace;assembly=` 引用业务控件）；`dataContextType`（需无参构造）；`resourceDictionaries` 按顺序合并，`{theme}` 替换为主题。
    - 不传视图参数时渲染内置样例，不要用样例截图冒充业务页面验证。

@@ -29,7 +29,7 @@
 | 宿主 | 启动方式 |
 | --- | --- |
 | .NET Framework | 直接运行 `out\RenderHarness.exe`，位数由 `PlatformTarget` 决定 |
-| .NET，`AnyCPU` | `UseAppHost=false`，通过 `dotnet RenderHarness.dll` 启动 |
+| .NET，`AnyCPU` | `UseAppHost=false`，通过 `dotnet RenderHarness.dll` 启动；`RollForward=Major`，本机没有该主版本的 WindowsDesktop 运行时时使用更高版本 |
 | .NET，固定 `x86` / `x64` / `ARM64` | `UseAppHost=true`，运行对应架构的 `RenderHarness.exe`，需安装该架构的 WindowsDesktop Runtime |
 
 宿主源码只使用 .NET Framework 4.7.2 与 .NET 5+ 共有的 API（不依赖 `System.Text.Json` 等 NuGet 包），同一份 `Program.cs` / `ConfiguredView.cs` / `ViewFactory.cs` 适用于全部 TFM。定制 `ViewFactory.cs` 时同样只能用目标 TFM 存在的 API。.NET 5 / 6 / 7 已停止支持，构建时会出现 `NETSDK1138` 警告，不影响渲染。
@@ -53,7 +53,7 @@
 
 缓存键由程序集路径、`-TargetFramework` / `-Platform`、`-FactoryFile` 路径与工具版本（生成器和 `assets/*.cs` 的哈希）组成；视图参数每次重写 `harness.json`。业务程序集所在目录中任一 dll / exe 的大小或修改时间变化时重新构建，否则跳过构建；若程序集的 TFM 或位数也变了（如 4.6.1 升级到 4.8），先重新生成宿主工程。同一缓存宿主用系统互斥量串行化，多个代理并发调用也不会同时构建。
 
-使用 `-Preset` 时显式参数覆盖预设，互斥的参数按组覆盖：显式 `-ViewType` / `-Xaml` 覆盖预设的 `viewType` 与 `xaml`，显式 `-DataContextType` / `-DataContextFactory` 覆盖预设的两者，显式 `-Width` / `-Height` 覆盖预设的 `sizes`。主题、DPI、尺寸的组合不能为空。
+使用 `-Preset` 时显式参数覆盖预设，视图中的设置覆盖 `defaults`，互斥的参数按组覆盖（视图写了 `xaml` 时不继承 `defaults` 的 `viewType`，写了 `width` / `height` 时不继承 `sizes`，以此类推）：显式 `-ViewType` / `-Xaml` 覆盖预设的 `viewType` 与 `xaml`，显式 `-DataContextType` / `-DataContextFactory` 覆盖预设的两者，显式 `-Width` / `-Height` 覆盖预设的 `sizes`。主题、DPI、尺寸的组合不能为空。
 
 **单个组合**时输出与退出码同 `invoke-wpf-render.ps1`。**多个组合**（主题 × 尺寸 × DPI）时最多构建一次，每个组合在独立进程中渲染，然后在缓存宿主下新建 `matrix-<时间>-<id>` 目录并返回它：
 
@@ -117,7 +117,7 @@
 | 依赖 `Loaded`、`PresentationSource`、`RelativeSource AncestorType=Window`、实际承载尺寸的页面；或工厂直接返回 `Window` | `-WindowHost` | 创建真实但屏外、不激活的窗口；仍需要桌面会话（服务 / 无会话的 CI 代理通常不行） |
 | 页面切换卡顿、加载耗时、线程阻塞 | 另做性能诊断 | 快照只能证明某个状态下的外观，见 `references/verification.md` 的性能边界 |
 
-`Window` 只能在 `-WindowHost` 下使用；`layout-only` 遇到 `Window` 会直接报错。窗口的 `MinWidth` / `MaxWidth` 等约束仍可能改变实际尺寸，请核对 manifest 中的 `actualWidthDip` / `actualHeightDip`。
+`Window` 只能在 `-WindowHost` 下使用；`layout-only` 遇到 `Window` 会直接报错。窗口的 `MinWidth` / `MaxWidth` 等约束仍可能改变实际尺寸，请核对 manifest 中的 `actualWidthDip` / `actualHeightDip`。窗口显示后会再强制一次屏外位置、普通状态与尺寸（业务窗口常在 `Loaded` 中恢复上次的最大化状态）。渲染结束时不关闭窗口、不调用 `Application.Shutdown`（避免触发 `Closing` 中的确认对话框），结果全部写出后才执行 `ViewFactory.Cleanup`，随后结束进程。
 
 ---
 
@@ -136,7 +136,7 @@
 | `build.log` | 未使用 `-NoBuild` | `dotnet build` 完整输出 |
 | `render.stdout.log` / `render.stderr.log` | 子进程启动后 | 宿主标准输出 / 错误 |
 | `error.txt` | 失败时 | 异常堆栈、自检失败、进程无法启动或超时说明。宿主崩溃而没有写出它时（如缺少 WindowsDesktop 运行时），`summary.json` 的 `error` 取 `render.stderr.log` 的末尾 |
-| `summary.json` | 总是 | 结论摘要：`status`（`ok` / `binding-issues` / `failed:build` / `failed:locate` / `failed:start` / `failed:render` / `failed:timeout`）、`snapshot`、`elementSnapshot` / `elementRectDip` / `elementError`（使用 `-Element` 时）、`sourceViewType`、尺寸、衬底、前 5 条绑定问题（`bindingIssues`，解析后的单行结论）、布局问题条数与前 10 条（`layoutIssueCount` / `layoutIssues`）、编译错误、异常前 15 行；同时打印到控制台 |
+| `summary.json` | 总是 | 结论摘要：`status`（`ok` / `binding-issues` / `failed:build` / `failed:locate` / `failed:start` / `failed:render` / `failed:timeout`）、`snapshot`、`elementSnapshot` / `elementRectDip` / `elementError`（使用 `-Element` 时）、`warning`（如窗口模式下 RightToLeft 的业务 Window 截图未镜像）、`sourceViewType`、尺寸、衬底、前 5 条绑定问题（`bindingIssues`，解析后的单行结论）、布局问题条数与前 10 条（`layoutIssueCount` / `layoutIssues`）、编译错误、异常前 15 行；同时打印到控制台 |
 
 `layout.json` 的布局问题（只检查有文本的 `TextBlock`、有图像的 `Image` 与 `Control`，容器本身不报告）：
 

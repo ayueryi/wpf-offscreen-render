@@ -26,17 +26,22 @@ if ($List) {
     return
 }
 
-# 配置已被删除或移动：-List 仍会列出它，按路径撤销（不计算哈希）。
-if ($Revoke -and -not (Test-Path -LiteralPath $Path)) {
+# 配置已被删除或移动：-List 仍会列出它，按原路径撤销（不计算哈希）。-Path 是目录时先看该目录自己的记录，
+# 不能向上找到父目录的配置并误撤销它。
+if ($Revoke) {
     $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
-    if ([IO.Path]::GetFileName($full) -ne 'wpf-render.json') { $full = Join-Path $full 'wpf-render.json' }
-    $target = $full.Replace('\', '/')
-    $all = @(Read-TrustStore)
-    $kept = @($all | Where-Object { $_.config -ine $target })
-    if ($kept.Count -eq $all.Count) { throw "没有找到 $target 的授权记录（-List 查看已授权的配置）。" }
-    Write-TrustStore $kept
-    Write-Output "已撤销授权：$target"
-    return
+    if ((Test-Path -LiteralPath $full -PathType Container) -or [IO.Path]::GetFileName($full) -ne 'wpf-render.json') { $full = Join-Path $full 'wpf-render.json' }
+    if (-not (Test-Path -LiteralPath $full)) {
+        $target = $full.Replace('\', '/')
+        $all = @(Read-TrustStore)
+        $kept = @($all | Where-Object { $_.config -ine $target })
+        if ($kept.Count -lt $all.Count) {
+            Write-TrustStore $kept
+            Write-Output "已撤销授权：$target"
+            return
+        }
+        if (-not (Test-Path -LiteralPath $Path)) { throw "没有找到 $target 的授权记录（-List 查看已授权的配置）。" }
+    }
 }
 
 if (Test-Path -LiteralPath $Path -PathType Container) {

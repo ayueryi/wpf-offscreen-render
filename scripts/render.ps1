@@ -62,11 +62,17 @@ if ($Preset -or $Config -or $Build) {
     $views = if ($presetFile.views) { $presetFile.views } else { @{} }
     if (-not $Preset) { throw "需要 -Preset。$Config 中的视图：$(@($views.Keys) -join ', ')" }
     if (-not $views.ContainsKey($Preset)) { throw "$Config 中没有视图 $Preset。可用：$(@($views.Keys) -join ', ')" }
+    # 互斥的键：一层中设置了其中一个，就覆盖下层（defaults）中与之互斥的键，与显式参数覆盖预设的规则相同。
+    $exclusive = @{ viewType = 'xaml'; xaml = 'viewType'; dataContextType = 'dataContextFactory'; dataContextFactory = 'dataContextType'; width = 'sizes'; height = 'sizes' }
     $settings = @{}
-    foreach ($source in @($presetFile.defaults, $views[$Preset])) { if ($source) { foreach ($k in $source.Keys) { $settings[$k] = $source[$k] } } }
+    foreach ($source in @($presetFile.defaults, $views[$Preset])) {
+        if (-not $source) { continue }
+        foreach ($k in $source.Keys) { if ($exclusive.ContainsKey($k)) { $settings.Remove($exclusive[$k]) } }
+        foreach ($k in $source.Keys) { $settings[$k] = $source[$k] }
+    }
 
-    # 相对路径相对于配置文件所在目录；pack URI（/Asm;component/...）与绝对路径保持原样。
-    $resolve = { param($value) if ([IO.Path]::IsPathRooted($value) -or $value -like '*;component/*') { $value } else { [IO.Path]::GetFullPath((Join-Path $configDir $value)) } }
+    # 相对路径相对于配置文件所在目录；pack URI（/Asm;component/...）、其他 URI 与绝对路径保持原样。
+    $resolve = { param($value) if ([IO.Path]::IsPathRooted($value) -or $value -like '*;component/*' -or $value -match '^(pack|file|https?)://') { $value } else { [IO.Path]::GetFullPath((Join-Path $configDir $value)) } }
     $mapping = [ordered]@{
         assemblyPaths = 'AssemblyPath', $true; viewType = 'ViewType', $false; xaml = 'Xaml', $true; dataContextType = 'DataContextType', $false
         dataContextFactory = 'DataContextFactory', $false; factoryFile = 'FactoryFile', $true; resourceDictionaries = 'ResourceDictionary', $true
@@ -96,6 +102,8 @@ if ($Preset -or $Config -or $Build) {
         if (-not $command -or -not $command[0]) { throw "$Config 没有为 $Preset 配置 build 命令。" }
         $buildLog = Join-Path ([IO.Path]::GetTempPath()) ('wpf-render-build-' + [guid]::NewGuid().ToString('N') + '.log')
         Push-Location -LiteralPath $configDir
+        # 先清零：build 是 .ps1 脚本时在当前进程中运行，不一定设置 $LASTEXITCODE，会沿用上一次渲染的退出码。
+        $global:LASTEXITCODE = 0
         try { & $command[0] @($command | Select-Object -Skip 1) *> $buildLog; $buildCode = $LASTEXITCODE }
         finally { Pop-Location }
         if ($buildCode -ne 0) {
@@ -114,7 +122,7 @@ if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).Prov
 $assemblies = @($AssemblyPath | ForEach-Object { (Resolve-Path -LiteralPath $_).ProviderPath })
 # 资源字典：pack URI 与绝对路径保持原样；存在的相对路径按当前位置解析（{theme} 按 light 检查）。
 $ResourceDictionary = @($ResourceDictionary | ForEach-Object {
-        if ([IO.Path]::IsPathRooted($_) -or $_ -like '*;component/*' -or $_ -match '^[a-z][a-z0-9+.-]+:' -or
+        if ([IO.Path]::IsPathRooted($_) -or $_ -like '*;component/*' -or $_ -match '^(pack|file|https?)://' -or
             -not (Test-Path -LiteralPath $_.Replace('{theme}', 'light'))) { $_ }
         else { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($_) }
     })

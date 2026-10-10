@@ -32,7 +32,7 @@ if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).Prov
 if ($Xaml) { $Xaml = (Resolve-Path -LiteralPath $Xaml).ProviderPath }
 # 资源字典：pack URI（/Asm;component/...）与绝对路径保持原样；存在的相对路径按当前位置解析（{theme} 按 light 检查）。
 $ResourceDictionary = @($ResourceDictionary | ForEach-Object {
-        if ([IO.Path]::IsPathRooted($_) -or $_ -like '*;component/*' -or $_ -match '^[a-z][a-z0-9+.-]+:' -or
+        if ([IO.Path]::IsPathRooted($_) -or $_ -like '*;component/*' -or $_ -match '^(pack|file|https?)://' -or
             -not (Test-Path -LiteralPath $_.Replace('{theme}', 'light'))) { $_ }
         else { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($_) }
     })
@@ -159,6 +159,8 @@ $project = @"
     <PlatformTarget>$Platform</PlatformTarget>
     <!-- .NET Framework 直接运行 RenderHarness.exe；.NET 在固定位数时用 apphost 选对应架构的运行时，否则 dotnet RenderHarness.dll -->
     <UseAppHost>$(if ($isFramework -or $Platform -ne 'AnyCPU') { 'true' } else { 'false' })</UseAppHost>
+    <!-- .NET 宿主在本机没有对应主版本的 WindowsDesktop 运行时时前滚到更高版本（如只装了 .NET 10）。 -->
+    <RollForward>Major</RollForward>
     <EnableDefaultPageItems>false</EnableDefaultPageItems>
     <DefaultItemExcludes>`$(DefaultItemExcludes);out/**;render-*/**</DefaultItemExcludes>
   </PropertyGroup>

@@ -44,6 +44,10 @@ public sealed class RenderTools(ScriptRunner runner)
         CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows()) return WindowsOnly();
+        if ((RelativePathError(("config", config), ("xaml", xaml), ("factoryFile", factoryFile)) ?? RelativePathError("assemblyPaths", assemblyPaths)) is { } pathError)
+            return Error(pathError);
+        if (preset is not null && config is null && runner.StartedInPluginRoot)
+            return Error("使用 preset 时需要传 config（wpf-render.json 的绝对路径或所在目录）：服务器的工作目录是插件目录，无法向上查找业务项目的配置。");
         var arguments = ViewArguments(assemblyPaths, viewType, xaml, dataContextType, resourceDictionaries, targetFramework, platform);
         arguments["Config"] = config;
         arguments["Preset"] = preset;
@@ -81,13 +85,15 @@ public sealed class RenderTools(ScriptRunner runner)
     [Description("列出业务项目 wpf-render.json 中配置的视图（名称、视图类型、主题 / 尺寸、watch 文件模式），供 render_view 的 preset 参数使用。")]
     public CallToolResult ListViews([Description("wpf-render.json 的绝对路径或其所在目录")] string config)
     {
+        if (RelativePathError(("config", config)) is { } pathError) return Error(pathError);
         var path = Directory.Exists(config) ? Path.Combine(config, "wpf-render.json") : config;
         if (ReadJson(path) is not { } file) return Error($"找不到或无法解析 {path}。");
         var defaults = file["defaults"] as JsonObject;
         var views = new JsonArray();
         foreach (var (name, value) in file["views"] as JsonObject ?? [])
         {
-            JsonNode? Setting(string key) => (value?[key] ?? defaults?[key])?.DeepClone();
+            // 视图设置了互斥键中的一个时，不再继承 defaults 中的另一个（与 render.ps1 的合并规则一致）。
+            JsonNode? Setting(string key) => (value?[key] ?? (Exclusive(key).Any(other => value?[other] is not null) ? null : defaults?[key]))?.DeepClone();
             views.Add(new JsonObject
             {
                 ["name"] = name,
@@ -121,6 +127,7 @@ public sealed class RenderTools(ScriptRunner runner)
         CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows()) return WindowsOnly();
+        if ((RelativePathError(("xaml", xaml)) ?? RelativePathError("assemblyPaths", assemblyPaths)) is { } pathError) return Error(pathError);
         var arguments = ViewArguments(assemblyPaths, viewType, xaml, dataContextType, resourceDictionaries, targetFramework, platform);
         arguments["Theme"] = themes is { Length: > 0 } ? themes : new[] { "light", "dark" };
         arguments["Size"] = sizes is { Length: > 0 } ? sizes : null;
@@ -157,6 +164,7 @@ public sealed class RenderTools(ScriptRunner runner)
         CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows()) return WindowsOnly();
+        if (RelativePathError(("before", before), ("after", after)) is { } pathError) return Error(pathError);
         var arguments = new Dictionary<string, object?> { ["Before"] = before, ["After"] = after, ["Tolerance"] = tolerance };
         var result = await runner.RunAsync(Path.Combine("scripts", "compare-snapshots.ps1"), arguments, TimeSpan.FromMinutes(5), cancellationToken);
         JsonNode? comparison = null;
@@ -179,6 +187,7 @@ public sealed class RenderTools(ScriptRunner runner)
         [Description("只返回该类型的布局问题：text-truncated / clipped / overlap / zero-size / out-of-viewport")] string? kind = null,
         [Description("最多返回的节点数")] int maxNodes = 200)
     {
+        if (RelativePathError(("outDir", outDir)) is { } pathError) return Error(pathError);
         var layout = ReadJson(Path.Combine(outDir, "layout.json"));
         if (layout is null) return Error($"找不到 {Path.Combine(outDir, "layout.json")}（渲染是否成功？）");
         var issues = (layout["issues"] as JsonArray ?? [])
@@ -225,6 +234,29 @@ public sealed class RenderTools(ScriptRunner runner)
         if (result.Error is not null) text += $"\n错误：{result.Error}";
         return new CallToolResult { Content = [new TextContentBlock { Text = text }], IsError = result.ExitCode != 0 };
     }
+
+    private static string[] Exclusive(string key) => key switch
+    {
+        "viewType" => ["xaml"],
+        "xaml" => ["viewType"],
+        "sizes" => ["width", "height"],
+        _ => [],
+    };
+
+    // 相对路径按服务器的工作目录解析。Codex 等客户端以插件目录为工作目录启动服务器，此时相对路径会指向插件内部，直接报错。
+    private string? RelativePathError(params (string Name, string? Value)[] paths)
+    {
+        if (!runner.StartedInPluginRoot) return null;
+        foreach (var (name, value) in paths)
+        {
+            if (!string.IsNullOrEmpty(value) && !Path.IsPathFullyQualified(value))
+                return $"{name} 需要绝对路径（收到 {value}）：服务器的工作目录是插件目录，相对路径会解析到插件内部。";
+        }
+        return null;
+    }
+
+    private string? RelativePathError(string name, string[]? values) =>
+        RelativePathError((values ?? []).Select(value => (name, (string?)value)).ToArray());
 
     private static Dictionary<string, object?> ViewArguments(string[]? assemblyPaths, string? viewType, string? xaml, string? dataContextType,
         string[]? resourceDictionaries, string? targetFramework, string? platform) => new()
