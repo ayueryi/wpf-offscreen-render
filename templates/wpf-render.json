@@ -1,0 +1,31 @@
+{
+  "verifyOnStop": true,
+  "blockOnLayoutIssues": false,
+  "defaults": {
+    "assemblyPaths": ["src/MyApp/bin/Debug/net8.0-windows/MyApp.dll"],
+    "build": ["dotnet", "build", "src/MyApp/MyApp.csproj", "-c", "Debug", "--nologo"],
+    "resourceDictionaries": ["/MyUi;component/Themes/Generic.xaml", "/MyUi;component/Themes/{theme}.xaml"],
+    "themes": ["light"],
+    "width": 1280,
+    "height": 800
+  },
+  "views": {
+    "OrderList": {
+      "viewType": "MyUi.Views.OrderListView",
+      "dataContextFactory": "MyUi.Preview.PreviewData.CreateOrderList",
+      "themes": ["light", "dark"],
+      "watch": ["src/MyUi/Views/OrderList*", "src/MyUi/ViewModels/OrderList*", "src/MyUi/Themes/**"]
+    },
+    "OrderDetail": {
+      "viewType": "MyUi.Views.OrderDetailView",
+      "factoryFile": "preview/OrderDetailFactory.cs",
+      "windowHost": true,
+      "watch": ["src/MyUi/Views/OrderDetail*", "preview/OrderDetailFactory.cs"]
+    },
+    "LoginProbe": {
+      "xaml": "preview/LoginProbe.xaml",
+      "sizes": ["1280x800", "800x600"],
+      "watch": ["src/MyUi/Views/Login*"]
+    }
+  }
+}

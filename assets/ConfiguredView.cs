@@ -45,8 +45,12 @@ internal static class ConfiguredView
                 ?? throw new InvalidOperationException($"XAML 根元素不是 FrameworkElement：{path}");
         }
 
+        if (view is not null && config.DataContextType is not null && config.DataContextFactory is not null)
+            throw new InvalidOperationException("harness.json 中 dataContextType 与 dataContextFactory 只能二选一。");
         if (view is not null && config.DataContextType is not null)
             view.DataContext = Activator.CreateInstance(ResolveType(config.DataContextType), nonPublic: true);
+        if (view is not null && config.DataContextFactory is not null)
+            view.DataContext = InvokeFactory(config.DataContextFactory);
         return view;
     }
 
@@ -54,6 +58,17 @@ internal static class ConfiguredView
     private static bool IsFullyQualifiedPath(string path) =>
         path.StartsWith(@"\\", StringComparison.Ordinal)
         || path.Length >= 3 && char.IsLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/');
+
+    // "Namespace.Type.Method"：调用无参静态方法（可为 non-public）创建 DataContext，适合需要构造参数或 stub 服务的 ViewModel。
+    private static object? InvokeFactory(string factory)
+    {
+        var dot = factory.LastIndexOf('.');
+        if (dot <= 0 || dot == factory.Length - 1) throw new InvalidOperationException($"dataContextFactory 应为 类型全名.方法名：{factory}");
+        var type = ResolveType(factory.Substring(0, dot));
+        var method = type.GetMethod(factory.Substring(dot + 1), BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, null, Type.EmptyTypes, null)
+            ?? throw new InvalidOperationException($"{type.FullName} 上没有无参静态方法 {factory.Substring(dot + 1)}。");
+        return method.Invoke(null, null);
+    }
 
     // 支持程序集限定名，或仅写全名时在已加载程序集与输出目录 DLL 中查找。
     private static Type ResolveType(string name)
@@ -85,6 +100,7 @@ internal static class ConfiguredView
         [DataMember(Name = "viewType")] public string? ViewType { get; set; }
         [DataMember(Name = "xaml")] public string? Xaml { get; set; }
         [DataMember(Name = "dataContextType")] public string? DataContextType { get; set; }
+        [DataMember(Name = "dataContextFactory")] public string? DataContextFactory { get; set; }
         [DataMember(Name = "resourceDictionaries")] public string[]? ResourceDictionaries { get; set; }
     }
 }

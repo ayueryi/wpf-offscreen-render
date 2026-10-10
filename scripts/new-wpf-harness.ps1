@@ -14,12 +14,18 @@ param(
     [string]$ViewType,
     [string]$Xaml,
     [string]$DataContextType,
-    [string[]]$ResourceDictionary = @()
+    # 无参静态工厂方法 "Namespace.Type.Method"，与 -DataContextType 二选一。
+    [string]$DataContextFactory,
+    [string[]]$ResourceDictionary = @(),
+    # 用这个文件替换生成工程中的 ViewFactory.cs（业务仓库中受版本管理的预览工厂）。
+    [string]$FactoryFile
 )
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'WPF 渲染需要 Windows。' }
 if ($ViewType -and $Xaml) { throw '-ViewType 与 -Xaml 只能二选一。' }
-if ($DataContextType -and -not ($ViewType -or $Xaml)) { throw '-DataContextType 需要配合 -ViewType 或 -Xaml。' }
+if ($DataContextType -and $DataContextFactory) { throw '-DataContextType 与 -DataContextFactory 只能二选一。' }
+if (($DataContextType -or $DataContextFactory) -and -not ($ViewType -or $Xaml)) { throw '-DataContextType / -DataContextFactory 需要配合 -ViewType 或 -Xaml。' }
+if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).Path }
 if ($Xaml) { $Xaml = (Resolve-Path -LiteralPath $Xaml).Path }
 
 # 读取程序集的 TargetFrameworkAttribute（如 .NETFramework,Version=v4.7.2）与位数要求，不加载程序集。
@@ -163,11 +169,13 @@ $config = [ordered]@{
     viewType = if ($ViewType) { $ViewType } else { $null }
     xaml = if ($Xaml) { $Xaml } else { $null }
     dataContextType = if ($DataContextType) { $DataContextType } else { $null }
+    dataContextFactory = if ($DataContextFactory) { $DataContextFactory } else { $null }
     resourceDictionaries = @($ResourceDictionary)
 }
 $configPath = Join-Path $WorkDir 'harness.json'
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 3), $utf8)
 Copy-Item -Path (Join-Path $PSScriptRoot '..\assets\*.cs') -Destination $WorkDir
+if ($FactoryFile) { Copy-Item -LiteralPath $FactoryFile -Destination (Join-Path $WorkDir 'ViewFactory.cs') -Force }
 [pscustomobject]@{
     WorkDir = $WorkDir; ProjectPath = Join-Path $WorkDir 'RenderHarness.csproj'; ConfigPath = $configPath
     TargetFramework = $TargetFramework; Platform = $Platform

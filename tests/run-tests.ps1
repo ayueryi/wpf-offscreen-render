@@ -73,6 +73,12 @@ $cases = @(
     @{ Name = 'render-matrix'; Kind = 'Matrix' }
     @{ Name = 'compare-snapshots'; Kind = 'Compare' }
     @{ Name = 'mcp-server'; Kind = 'Mcp' }
+    @{ Name = 'factory-method'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.OrderView'; DataContextFactory = 'SampleViews.PreviewData.CreateRemoteOrder' }
+        Expect = @{ exitCode = 0; status = 'ok'; layoutText = 'Order #2048' } }
+    @{ Name = 'factory-file'; Sample = 'net8'; Generate = @{ FactoryFile = Join-Path $fixtures 'CustomViewFactory.cs' }
+        Expect = @{ exitCode = 0; status = 'ok'; sourceViewType = 'SampleViews.OrderView'; layoutText = 'Custom factory order' } }
+    @{ Name = 'preset'; Kind = 'Preset' }
+    @{ Name = 'stop-hook'; Kind = 'Hook' }
     @{ Name = 'net8-element'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'ClippedButton'; Dpi = 144 }
         Expect = @{ exitCode = 0; elementWidthDip = 300; elementPixelWidth = 450 } }
     @{ Name = 'net8-element-missing'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'NoSuchElement' }
@@ -145,6 +151,85 @@ function Test-Mcp($case) {
     finally { Remove-Item Env:WPF_RENDER_MCP_CACHE -ErrorAction SilentlyContinue }
     $lines | Where-Object { $_ -like 'FAIL *' } | ForEach-Object { $failures.Add($_) }
     if ($code -ne 0 -and $failures.Count -eq 0) { $failures.Add("MCP 测试退出码 $code"); $lines | Select-Object -Last 20 | ForEach-Object { $failures.Add("  $_") } }
+    $failures
+}
+
+# 生成一个业务项目式的预设目录：wpf-render.json 的 build 命令把样例程序集构建到 ./bin。
+function New-PresetProject([string]$Name) {
+    $dir = Join-Path $ArtifactsDir $Name
+    $null = New-Item -ItemType Directory -Path $dir
+    $preset = [ordered]@{
+        verifyOnStop = $true
+        defaults = [ordered]@{
+            assemblyPaths = @('bin/SampleViews.dll')
+            build = @('dotnet', 'build', $sampleProject, '-f', 'net8.0-windows', '-c', 'Release', '-o', 'bin', '--nologo')
+            width = 640; height = 360
+        }
+        views = [ordered]@{
+            Order = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextFactory = 'SampleViews.PreviewData.CreateRemoteOrder'; watch = @('src/Order/**') }
+            Broken = [ordered]@{ viewType = 'SampleViews.BrokenBindingView'; dataContextType = 'SampleViews.OrderPreviewVm'; watch = @('src/Broken/*.txt') }
+            Themes = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextType = 'SampleViews.OrderPreviewVm'; themes = @('light', 'dark') }
+        }
+    }
+    [IO.File]::WriteAllText((Join-Path $dir 'wpf-render.json'), ($preset | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    $dir
+}
+
+# 预设：-Build 先构建业务项目；显式参数覆盖预设；多主题预设得到汇总；未知预设列出可用名称。
+function Test-Preset($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $dir = New-PresetProject $case.Name
+    $cache = Join-Path $ArtifactsDir "$($case.Name)-cache"
+    $order = & $oneStep -Config $dir -Preset Order -Build -CacheRoot $cache 6> $null
+    $summary = Get-Content -LiteralPath (Join-Path "$order" 'summary.json') -Raw | ConvertFrom-Json
+    if ($summary.status -ne 'ok' -or $summary.pixelSize -ne '640x360') { $failures.Add("Order：期望 ok / 640x360，实际 $($summary.status) / $($summary.pixelSize)") }
+    $layout = Get-Content -LiteralPath (Join-Path "$order" 'layout.json') -Raw | ConvertFrom-Json
+    if (-not (@($layout.nodes) | Where-Object { "$($_.text)" -eq 'Order #2048' })) { $failures.Add('Order：dataContextFactory 未生效') }
+    $wide = & $oneStep -Config (Join-Path $dir 'wpf-render.json') -Preset Order -Width 900 -CacheRoot $cache 6> $null
+    $wideSummary = Get-Content -LiteralPath (Join-Path "$wide" 'summary.json') -Raw | ConvertFrom-Json
+    if ($wideSummary.pixelSize -ne '900x360') { $failures.Add("显式 -Width 应覆盖预设：$($wideSummary.pixelSize)") }
+    $themes = & $oneStep -Config $dir -Preset Themes -CacheRoot $cache 6> $null
+    $matrix = Get-Content -LiteralPath (Join-Path "$themes" 'matrix.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+    if ($matrix.rendered -ne 2) { $failures.Add("Themes 预设应渲染 2 个组合：$($matrix.rendered)") }
+    $null = & $oneStep -Config $dir -Preset Broken -CacheRoot $cache 6> $null
+    if ($LASTEXITCODE -ne 2) { $failures.Add("Broken 预设应以退出码 2 报告绑定问题：$LASTEXITCODE") }
+    try { $null = & $oneStep -Config $dir -Preset Missing -CacheRoot $cache 6> $null; $failures.Add('未知预设应报错') }
+    catch { if ($_.Exception.Message -notlike '*Order*Broken*' -and $_.Exception.Message -notlike '*Broken*Order*') { $failures.Add("未知预设的报错应列出可用视图：$($_.Exception.Message)") } }
+    $failures
+}
+
+# Stop hook：改动 watch 覆盖的文件后，绑定错误阻止结束；同一份改动不重复拦截；改动正常视图时放行。
+function Test-Hook($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $dir = New-PresetProject $case.Name
+    foreach ($file in 'src/Order/a.txt', 'src/Broken/b.txt') {
+        $path = Join-Path $dir $file
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force
+        Set-Content -LiteralPath $path -Value 'v1'
+    }
+    $null = & git -C $dir init -q 2>&1
+    $null = & git -C $dir -c user.name=test -c user.email=test@example.com add -A 2>&1
+    $null = & git -C $dir -c user.name=test -c user.email=test@example.com commit -q -m init 2>&1
+    $hook = Join-Path $root 'hooks\verify-on-stop.ps1'
+    $session = 'test-' + [guid]::NewGuid().ToString('N')
+    $payload = @{ cwd = $dir; session_id = $session; stop_hook_active = $false; hook_event_name = 'Stop' } | ConvertTo-Json -Compress
+    $invoke = { (($payload | & pwsh -NoProfile -NonInteractive -File $hook) -join "`n").Trim() }
+
+    Set-Content -LiteralPath (Join-Path $dir 'src/Broken/b.txt') -Value 'v2'
+    $first = & $invoke
+    $decision = try { $first | ConvertFrom-Json } catch { $null }
+    if ($decision.decision -ne 'block' -or $decision.reason -notlike '*CustomerNmae*') { $failures.Add("改动 Broken 后应阻止结束并给出绑定结论：$first") }
+    $second = & $invoke
+    if ($second) { $failures.Add("同一份改动不应重复拦截：$second") }
+
+    $null = & git -C $dir checkout -q -- src/Broken/b.txt 2>&1
+    Set-Content -LiteralPath (Join-Path $dir 'src/Order/a.txt') -Value 'v2'
+    $third = & $invoke
+    if ($third -like '*"decision"*' -or $third -notlike '*Order*') { $failures.Add("改动正常视图时应放行并报告通过：$third") }
+
+    $unrelated = @{ cwd = $ArtifactsDir; session_id = $session } | ConvertTo-Json -Compress
+    $quiet = (($unrelated | & pwsh -NoProfile -NonInteractive -File $hook) -join '').Trim()
+    if ($quiet) { $failures.Add("没有 wpf-render.json 的目录应静默退出：$quiet") }
     $failures
 }
 
@@ -225,6 +310,9 @@ function Test-Case($case) {
             }
             'errorPattern' {
                 if (-not (@($summary.error) -match [regex]::Escape($expected))) { $failures.Add("error 中没有 $expected") }
+            }
+            'layoutText' {
+                if (-not (@($layout.nodes) | Where-Object { "$($_.text)" -like "*$expected*" })) { $failures.Add("layout.json 中没有文本 $expected") }
             }
             'runtimePattern' {
                 if ("$($manifest.runtime)" -notmatch $expected) { $failures.Add("runtime：期望匹配 $expected，实际 $($manifest.runtime)") }

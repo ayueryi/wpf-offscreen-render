@@ -1,5 +1,35 @@
 # 接入真实 WPF 界面
 
+## 业务项目接入：wpf-render.json
+
+把要验证的视图登记在业务仓库根目录的 `wpf-render.json` 中，代理就能按名称渲染（MCP `render_view` 的 `config` + `preset`，或 `render.ps1 -Config <目录> -Preset <名称>`），结束本轮前的 Stop hook 也据此自动验证。完整示例见 [templates/wpf-render.json](../templates/wpf-render.json)。
+
+| 字段 | 位置 | 说明 |
+| --- | --- | --- |
+| `verifyOnStop` | 顶层 | `true` 时启用结束前自动验证（Claude Code 插件自带 Stop hook；Codex 见 [templates/codex-hooks.json](../templates/codex-hooks.json)） |
+| `blockOnLayoutIssues` | 顶层 | `true` 时布局问题也会阻止结束；默认只有渲染失败与绑定错误会阻止 |
+| `defaults` | 顶层 | 各视图共用的设置，视图中的同名字段覆盖它 |
+| `views.<名称>` | 顶层 | 一个视图预设 |
+| `assemblyPaths`、`xaml`、`factoryFile` | 预设 | 相对路径相对于 `wpf-render.json` 所在目录 |
+| `viewType`、`dataContextType`、`dataContextFactory` | 预设 | 同 `render.ps1` 的同名参数；`dataContextFactory` 为无参静态方法 `Namespace.Type.Method` |
+| `resourceDictionaries` | 预设 | pack URI 原样使用，其余相对路径相对于配置目录；`{theme}` 替换为主题 |
+| `themes`、`sizes`、`dpis` | 预设 | 多个值时得到多组合汇总（`matrix.json` 与总览图） |
+| `width`、`height`、`background`、`windowHost`、`element`、`targetFramework`、`platform` | 预设 | 同 `render.ps1` 参数 |
+| `build` | 预设 | 参数数组（不经过 shell），如 `["dotnet", "build", "src/MyApp/MyApp.csproj", "-c", "Debug"]`；`-Build` / `build: true` 时在配置目录执行 |
+| `watch` | 预设 | 文件模式（`**` 任意层级、`*` 单级），相对于配置目录；Stop hook 只验证改动命中 `watch` 的视图 |
+
+显式传入的参数覆盖预设值，例如 `render.ps1 -Config . -Preset OrderList -Width 900`。
+
+**DataContext 的三种来源**，按需要选择最轻的一种：
+
+1. `dataContextType`：无参构造的预览 ViewModel。
+2. `dataContextFactory`：无参静态工厂方法，适合需要构造参数、stub 服务或填充样例数据的 ViewModel，例如在业务项目中放一个 `PreviewData.CreateOrderList()`。
+3. `factoryFile`：业务仓库中受版本管理的 `ViewFactory.cs`，替换宿主默认工厂；可以配置资源、等待异步就绪、设置选中态和清理。形状见下文“资源、主题和 DataContext”，三个方法签名不能改。工厂文件内容变化时宿主自动重新构建。
+
+**Stop hook 的行为**：代理结束本轮前，hook 从会话目录向上找到 `wpf-render.json`；`verifyOnStop` 为 `true` 时，用 `git status` 找出未提交的改动，渲染 `watch` 命中的视图（先执行一次 `build`）。有渲染失败或绑定错误时阻止结束，并把结论（视图、绑定路径、截图路径）交给代理继续修复；同一份改动只验证一次，代理确认无法修复时不会被反复拦截。没有 `wpf-render.json`、未启用或非 Windows 时立即退出。
+
+**代理规则**：把 [templates/agent-rules.md](../templates/agent-rules.md) 的内容加入业务仓库的 `AGENTS.md`（Codex 等）或 `CLAUDE.md`（Claude Code），约定修改界面后必须渲染验证并在回复中给出结论。
+
 ## 工程和程序集
 
 本工具的工程独立于业务仓库，只有 WPF 和 .NET 依赖。使用 Windows + PowerShell 7。支持的宿主 TFM：`net472`、`net48`、`net481` 与 `net5.0-windows` … `net10.0-windows`（可带平台版本）。确认 `dotnet --list-sdks` 能构建该 TFM；.NET 宿主还需 `dotnet --list-runtimes` 中有对应的 WindowsDesktop Runtime，.NET Framework 宿主需本机已装对应版本的 .NET Framework，并有 Developer Pack 或 NuGet 访问来获取引用程序集。

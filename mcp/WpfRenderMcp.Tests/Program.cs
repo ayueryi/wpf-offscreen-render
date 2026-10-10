@@ -34,13 +34,25 @@ await using var client = await McpClient.CreateAsync(new StdioClientTransport(ne
 }));
 
 var tools = (await client.ListToolsAsync()).Select(tool => tool.Name).OrderBy(name => name).ToArray();
-Check("tools/list", tools.SequenceEqual(new[] { "compare_snapshots", "get_layout", "render_matrix", "render_view", "self_test" }), string.Join(",", tools));
+Check("tools/list", tools.SequenceEqual(new[] { "compare_snapshots", "get_layout", "list_views", "render_matrix", "render_view", "self_test" }), string.Join(",", tools));
 
 async Task<CallToolResult> Call(string tool, Dictionary<string, object?> arguments) =>
     await client.CallToolAsync(tool, arguments);
 
 var missing = await Call("get_layout", new() { ["outDir"] = Path.Combine(root, "no-such-render") });
 Check("get_layout 缺少目录时报错", missing.IsError == true && Texts(missing).Contains("layout.json"), Texts(missing));
+
+var presetDir = Directory.CreateTempSubdirectory("wpf-render-preset-").FullName;
+File.WriteAllText(Path.Combine(presetDir, "wpf-render.json"), """
+    { "verifyOnStop": true,
+      "defaults": { "assemblyPaths": ["bin/App.dll"], "themes": ["light", "dark"] },
+      "views": { "Order": { "viewType": "App.OrderView", "watch": ["src/Order/**"] }, "Login": { "xaml": "probe.xaml" } } }
+    """);
+var views = Json(await Call("list_views", new() { ["config"] = presetDir }));
+var names = (views?["views"] as JsonArray)?.Select(view => view?["name"]?.GetValue<string>()).OrderBy(name => name).ToArray() ?? [];
+Check("list_views 列出预设并合并 defaults", names.SequenceEqual(new[] { "Login", "Order" })
+    && (views?["views"] as JsonArray)?.First(view => view?["name"]?.GetValue<string>() == "Login")?["themes"]?.AsArray().Count == 2, views?.ToJsonString() ?? "");
+Directory.Delete(presetDir, recursive: true);
 
 if (!OperatingSystem.IsWindows())
 {

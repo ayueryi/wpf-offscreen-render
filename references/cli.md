@@ -40,6 +40,11 @@
 | `-Theme` | `light` | 可传多个，如 `-Theme light, dark` |
 | `-Dpi` | `96` | 可传多个，如 `-Dpi 96, 144` |
 | `-Size` | 无 | 多个视口，如 `-Size 1280x800, 800x600`；指定后忽略 `-Width` / `-Height` |
+| `-DataContextFactory` | 无 | 无参静态工厂方法 `Namespace.Type.Method`，与 `-DataContextType` 二选一（生成器同名参数相同） |
+| `-FactoryFile` | 无 | 替换宿主 `ViewFactory.cs` 的文件，内容变化时重新构建（生成器同名参数相同） |
+| `-Preset` | 无 | `wpf-render.json` 中的视图名，见 [integration.md](integration.md#业务项目接入wpf-renderjson) |
+| `-Config` | 从当前目录向上查找 | `wpf-render.json` 的路径或其所在目录 |
+| `-Build` | 关 | 渲染前在配置目录执行预设的 `build` 命令，失败时抛出并附构建日志末尾 |
 | `-CacheRoot` | `%TEMP%\wpf-render-cache` | 缓存宿主所在目录 |
 | `-NoCache` | 关 | 生成一次性宿主，不读写缓存 |
 | `-RetentionDays` | `7` | 超过该天数未使用的缓存宿主与渲染结果会被删除 |
