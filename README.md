@@ -1,7 +1,7 @@
 # WPF Offscreen Render
 
 [![CI](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml/badge.svg)](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-1.0.0-blue)
+![version](https://img.shields.io/badge/version-1.1.0-blue)
 ![.NET](https://img.shields.io/badge/WPF-.NET%20Framework%204.7.2%20%E2%80%93%20.NET%2010-512BD4)
 
 让 AI 编码代理（Codex、Claude Code 等）**亲眼看到**自己改出来的 WPF 界面：在独立的临时进程里把真实的 `UserControl` / `Page` / `Window` 渲染成 PNG，并给出解析好的绑定错误和布局问题。
@@ -38,7 +38,7 @@
 
 ## 安装到代理
 
-**前提**：Windows 本机，已安装 PowerShell 7（`pwsh`）与 .NET 8 或更高版本的 SDK。MCP 服务器首次启动时会编译到 `%LOCALAPPDATA%\wpf-offscreen-render\mcp`，需要几秒钟，之后直接启动。
+**前提**：Windows 本机，已安装 PowerShell 7（`pwsh`）与 .NET 8 或更高版本的 SDK。MCP 服务器首次启动时会编译到 `%LOCALAPPDATA%\wpf-offscreen-render\mcp`，需要几秒钟，之后直接启动。首次编译需要访问 NuGet；离线或内网环境的做法见 [verification.md](references/verification.md#离线与内网环境)。
 
 ### Claude Code
 
@@ -119,7 +119,15 @@ Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh
 
 1. **登记视图**：把 [templates/wpf-render.json](templates/wpf-render.json) 复制到业务仓库根目录，填写程序集、视图类型、主题 / 尺寸、构建命令，以及每个视图对应的源文件（`watch`）。
 2. **约定规则**：把 [templates/agent-rules.md](templates/agent-rules.md) 的内容加入业务仓库的 `AGENTS.md`（Codex）或 `CLAUDE.md`（Claude Code），要求修改界面后渲染验证并在回复中给出结论。
-3. **结束前自动验证**：`wpf-render.json` 里设置 `"verifyOnStop": true`。Claude Code 插件自带的 Stop hook 会在代理结束本轮前，渲染 `watch` 命中改动的视图；有渲染失败或绑定错误时阻止结束，让代理继续修复。同一份改动只验证一次。Codex 需要按 [templates/codex-hooks.json](templates/codex-hooks.json) 自行配置（尚未在真实 Codex 中验证）。
+3. **结束前自动验证**：`wpf-render.json` 里设置 `"verifyOnStop": true`，然后在本机授权这个项目：
+
+   ```powershell
+   pwsh -File <插件或克隆目录>\scripts\trust-project.ps1 -Path C:\work\MyApp
+   ```
+
+   Claude Code 插件自带的 Stop hook 会在代理结束本轮前，渲染 `watch` 命中改动的视图；有渲染失败或绑定错误时阻止结束，让代理继续修复。同一份改动只验证一次。hook 会执行配置中的 `build` 命令并运行业务程序集，所以**只对授权过的项目生效**；授权记录保存在本机（不在仓库里），`wpf-render.json` 被修改后需要重新授权，未授权时 hook 只提示一次如何授权。Codex 需要按 [templates/codex-hooks.json](templates/codex-hooks.json) 自行配置（尚未在真实 Codex 中验证）。
+
+   装了插件后，每轮结束都会启动一次 hook 进程（约 1 秒），没有 `wpf-render.json` 的项目会立即退出。
 
 ViewModel 需要构造参数或 stub 服务时，在预设中用 `dataContextFactory` 指定一个无参静态工厂方法；还需要配置资源、等待异步加载完成时，用 `factoryFile` 指向业务仓库中的 `ViewFactory.cs`。字段说明见 [integration.md](references/integration.md#业务项目接入wpf-renderjson)。
 
@@ -252,11 +260,11 @@ wpf-offscreen-render/
 ├── .claude-plugin/               # Claude Code 插件清单与市场清单
 ├── .codex-plugin/plugin.json     # Codex 插件清单
 ├── .agents/plugins/              # Codex 市场清单
-├── .mcp.json                     # MCP 服务器配置（Codex 插件使用）
+├── codex.mcp.json                # Codex 插件的 MCP 服务器配置（不用 .mcp.json，避免打开本仓库时被当作项目 MCP 配置加载）
 ├── skills/wpf-offscreen-render/  # Agent Skill（两家共用）与 Codex 元数据
 ├── hooks/                        # Stop hook：结束前渲染受影响视图
 ├── mcp/                          # MCP 服务器、启动器、桥接脚本与客户端测试
-├── scripts/                      # render / compare / 生成器 / 执行器 / 图像工具
+├── scripts/                      # render / compare / 生成器 / 执行器 / 图像工具 / 项目授权（trust-project）
 ├── assets/                       # 渲染宿主模板（Program、ConfiguredView、Diagnostics、Json、ViewFactory）
 ├── templates/                    # 业务项目接入模板
 ├── references/                   # 详细文档
@@ -275,6 +283,8 @@ wpf-offscreen-render/
 - 只对自己启动的渲染子进程施加超时与终止，只关闭自己创建的窗口，不会结束其他程序。
 - 临时工程与渲染产物位于 `%TEMP%`，不写入业务仓库；缓存超过 7 天未使用会自动清理。
 - 预设中的 `build` 是参数数组，不经过 shell；只在调用方显式要求构建时执行。
+- Stop hook 会执行仓库配置的构建命令并运行业务程序集，只对用户用 `trust-project.ps1` 授权过的配置生效，配置修改后授权自动失效。
+- 渲染类 MCP 工具（`render_view`、`render_matrix`、`compare_snapshots`、`self_test`）不声明只读，代理客户端会按正常的工具审批流程处理。
 
 ## 参考
 

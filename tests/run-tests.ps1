@@ -72,6 +72,7 @@ $cases = @(
         Expect = @{ exitCode = 0; layoutIssueCount = 0 } }
     @{ Name = 'render-cache'; Kind = 'Cache'; OneStep = @{ ViewType = 'SampleViews.OrderView'; DataContextType = 'SampleViews.OrderPreviewVm' } }
     @{ Name = 'render-matrix'; Kind = 'Matrix' }
+    @{ Name = 'cache-cleanup'; Kind = 'CacheCleanup' }
     @{ Name = 'compare-snapshots'; Kind = 'Compare' }
     @{ Name = 'mcp-server'; Kind = 'Mcp' }
     @{ Name = 'factory-method'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.OrderView'; DataContextFactory = 'SampleViews.PreviewData.CreateRemoteOrder' }
@@ -105,6 +106,35 @@ $cases = @(
 function Get-PngWidth([string]$Path) {
     $bytes = [IO.File]::ReadAllBytes($Path)
     ([int]$bytes[16] -shl 24) -bor ([int]$bytes[17] -shl 16) -bor ([int]$bytes[18] -shl 8) -bor [int]$bytes[19]
+}
+
+# 过期缓存清理：正被其他进程使用（持有互斥量）的目录不能删除，空闲的过期目录应被删除。
+function Test-CacheCleanup($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $cacheRoot = Join-Path $ArtifactsDir "$($case.Name)-cache"
+    $busy = 'test' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+    $idle = 'test' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+    foreach ($name in $busy, $idle) {
+        $dir = Join-Path $cacheRoot $name
+        $null = New-Item -ItemType Directory -Path $dir -Force
+        Set-Content -LiteralPath (Join-Path $dir 'cache.json') -Value '{}'
+        (Get-Item -LiteralPath (Join-Path $dir 'cache.json')).LastWriteTime = (Get-Date).AddDays(-30)
+    }
+    # 同一线程可以重入互斥量，因此由另一个进程持有。Start-Process 不给参数加引号，脚本用 -EncodedCommand 传递。
+    $signal = Join-Path $ArtifactsDir "$($case.Name)-held"
+    $holdScript = "`$m = [Threading.Mutex]::new(`$false, 'Local\wpf-render-$busy'); `$null = `$m.WaitOne(); Set-Content -LiteralPath '$signal' -Value 1; Start-Sleep -Seconds 120"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($holdScript))
+    $holder = Start-Process -FilePath 'pwsh' -PassThru -WindowStyle Hidden -ArgumentList "-NoProfile -EncodedCommand $encoded"
+    try {
+        $deadline = (Get-Date).AddSeconds(30)
+        while (-not (Test-Path -LiteralPath $signal) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+        if (-not (Test-Path -LiteralPath $signal)) { $failures.Add('持有互斥量的进程未就绪'); return $failures }
+        $null = & $oneStep -Width 320 -Height 200 -CacheRoot $cacheRoot 6> $null
+        if (-not (Test-Path -LiteralPath (Join-Path $cacheRoot $busy))) { $failures.Add('正在使用的过期缓存被删除了') }
+        if (Test-Path -LiteralPath (Join-Path $cacheRoot $idle)) { $failures.Add('空闲的过期缓存没有被删除') }
+    }
+    finally { Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue }
+    $failures
 }
 
 # render.ps1 多组合：只构建一次，matrix.json 汇总全部组合并生成 overview.png。
@@ -212,11 +242,23 @@ function Test-Hook($case) {
     $null = & git -C $dir -c user.name=test -c user.email=test@example.com add -A 2>&1
     $null = & git -C $dir -c user.name=test -c user.email=test@example.com commit -q -m init 2>&1
     $hook = Join-Path $root 'hooks\verify-on-stop.ps1'
+    $trustScript = Join-Path $root 'scripts\trust-project.ps1'
     $session = 'test-' + [guid]::NewGuid().ToString('N')
     $payload = @{ cwd = $dir; session_id = $session; stop_hook_active = $false; hook_event_name = 'Stop' } | ConvertTo-Json -Compress
     $invoke = { (($payload | & pwsh -NoProfile -NonInteractive -File $hook) -join "`n").Trim() }
+    # 授权记录写到测试目录，不影响本机。
+    $previousTrust = $env:WPF_RENDER_TRUST_FILE
+    $env:WPF_RENDER_TRUST_FILE = Join-Path $ArtifactsDir "$($case.Name)-trust.json"
+    try {
 
     Set-Content -LiteralPath (Join-Path $dir 'src/Broken/b.txt') -Value 'v2'
+    # 未授权：不执行构建与渲染，只提示一次如何授权。
+    $untrusted = (((@{ cwd = $dir; session_id = "$session-untrusted" } | ConvertTo-Json -Compress) | & pwsh -NoProfile -NonInteractive -File $hook) -join '').Trim()
+    $notice = try { $untrusted | ConvertFrom-Json } catch { $null }
+    if ($notice.decision -or $notice.systemMessage -notlike '*trust-project.ps1*') { $failures.Add("未授权时应只提示授权方法：$untrusted") }
+    if (Test-Path -LiteralPath (Join-Path $dir 'bin')) { $failures.Add('未授权时不应执行 build') }
+    $null = & $trustScript -Path $dir
+
     $first = & $invoke
     $decision = try { $first | ConvertFrom-Json } catch { $null }
     if ($decision.decision -ne 'block' -or $decision.reason -notlike '*CustomerNmae*') { $failures.Add("改动 Broken 后应阻止结束并给出绑定结论：$first") }
@@ -231,6 +273,14 @@ function Test-Hook($case) {
     $unrelated = @{ cwd = $ArtifactsDir; session_id = $session } | ConvertTo-Json -Compress
     $quiet = (($unrelated | & pwsh -NoProfile -NonInteractive -File $hook) -join '').Trim()
     if ($quiet) { $failures.Add("没有 wpf-render.json 的目录应静默退出：$quiet") }
+
+    # 授权后修改配置（例如 build 命令）：授权失效，提示重新授权。
+    Add-Content -LiteralPath (Join-Path $dir 'wpf-render.json') -Value ' '
+    Set-Content -LiteralPath (Join-Path $dir 'src/Broken/b.txt') -Value 'v3'
+    $changed = (((@{ cwd = $dir; session_id = "$session-changed" } | ConvertTo-Json -Compress) | & pwsh -NoProfile -NonInteractive -File $hook) -join '').Trim()
+    if ($changed -like '*"decision"*' -or $changed -notlike '*修改*') { $failures.Add("配置修改后应要求重新授权：$changed") }
+    }
+    finally { $env:WPF_RENDER_TRUST_FILE = $previousTrust }
     $failures
 }
 

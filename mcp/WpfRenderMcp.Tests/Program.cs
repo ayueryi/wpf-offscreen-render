@@ -33,8 +33,12 @@ await using var client = await McpClient.CreateAsync(new StdioClientTransport(ne
     Arguments = ["-NoProfile", "-File", Path.Combine(root, "mcp", "start.ps1")],
 }));
 
-var tools = (await client.ListToolsAsync()).Select(tool => tool.Name).OrderBy(name => name).ToArray();
+var toolList = await client.ListToolsAsync();
+var tools = toolList.Select(tool => tool.Name).OrderBy(name => name).ToArray();
 Check("tools/list", tools.SequenceEqual(new[] { "compare_snapshots", "get_layout", "list_views", "render_matrix", "render_view", "self_test" }), string.Join(",", tools));
+// 会构建、运行业务代码或写文件的工具不能声明只读，否则客户端可能据此自动批准。
+var readOnly = toolList.Where(tool => tool.ProtocolTool.Annotations?.ReadOnlyHint == true).Select(tool => tool.Name).OrderBy(name => name).ToArray();
+Check("只有查询类工具声明只读", readOnly.SequenceEqual(new[] { "get_layout", "list_views" }), string.Join(",", readOnly));
 
 async Task<CallToolResult> Call(string tool, Dictionary<string, object?> arguments) =>
     await client.CallToolAsync(tool, arguments);

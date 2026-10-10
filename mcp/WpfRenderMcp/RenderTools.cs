@@ -14,7 +14,8 @@ public sealed class RenderTools(ScriptRunner runner)
     private const int MaxImageSide = 2400;
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-    [McpServerTool(Name = "render_view", Title = "Render WPF view", ReadOnly = true, OpenWorld = false)]
+    // 渲染会构建项目（build: true 时执行预设命令）、运行业务代码并写入文件，不能标为只读，以免客户端据此自动批准。
+    [McpServerTool(Name = "render_view", Title = "Render WPF view", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("在独立临时进程中把真实 WPF UserControl / Page / Window 或松散 XAML 离屏渲染成 PNG（需要 Windows）。"
         + "返回 JSON 摘要（status、bindingIssues 单行绑定结论、layoutIssues 布局问题、尺寸、outDir）和截图。"
         + "业务项目有 wpf-render.json 时优先用 config + preset（先用 list_views 查看可用视图），build=true 会先构建业务项目；"
@@ -101,7 +102,7 @@ public sealed class RenderTools(ScriptRunner runner)
         return new CallToolResult { Content = [Text(new JsonObject { ["config"] = Path.GetFullPath(path), ["verifyOnStop"] = file["verifyOnStop"]?.DeepClone(), ["views"] = views })] };
     }
 
-    [McpServerTool(Name = "render_matrix", Title = "Render WPF view matrix", ReadOnly = true, OpenWorld = false)]
+    [McpServerTool(Name = "render_matrix", Title = "Render WPF view matrix", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("一次渲染多个主题 × 尺寸 × DPI 组合（需要 Windows），只构建一次。返回 matrix JSON（每个组合的状态、绑定与布局问题、截图路径）和拼好的总览图。")]
     public async Task<CallToolResult> RenderMatrix(
         [Description("业务程序集绝对路径")] string[]? assemblyPaths = null,
@@ -145,7 +146,7 @@ public sealed class RenderTools(ScriptRunner runner)
         return ScriptFailure(result);
     }
 
-    [McpServerTool(Name = "compare_snapshots", Title = "Compare WPF snapshots", ReadOnly = true, OpenWorld = false)]
+    [McpServerTool(Name = "compare_snapshots", Title = "Compare WPF snapshots", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("比较前后两次渲染（需要 Windows）：返回 status（same / different）、变化像素占比、变化区域（像素与 DIP，可对照 get_layout）、"
         + "两次渲染的环境差异，以及差异图（变化像素标红）。before / after 为 render_view 返回的 outDir 或 snapshot.png 路径。")]
     public async Task<CallToolResult> CompareSnapshots(
@@ -214,7 +215,7 @@ public sealed class RenderTools(ScriptRunner runner)
         return new CallToolResult { Content = [Text(response)] };
     }
 
-    [McpServerTool(Name = "self_test", Title = "Self-test WPF rendering environment", ReadOnly = true, OpenWorld = false)]
+    [McpServerTool(Name = "self_test", Title = "Self-test WPF rendering environment", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("运行环境自检（tests/run-tests.ps1 -Quick，需要 Windows）：构建两个宿主并渲染内置样例与松散 XAML，确认 .NET SDK、WindowsDesktop 运行时与 PowerShell 可用。首次使用或渲染异常怀疑环境问题时调用。")]
     public async Task<CallToolResult> SelfTest(CancellationToken cancellationToken = default)
     {

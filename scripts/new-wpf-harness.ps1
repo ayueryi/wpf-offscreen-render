@@ -171,6 +171,7 @@ $config = [ordered]@{
     dataContextType = if ($DataContextType) { $DataContextType } else { $null }
     dataContextFactory = if ($DataContextFactory) { $DataContextFactory } else { $null }
     resourceDictionaries = @($ResourceDictionary)
+    assemblies = @($targets | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.Path) })
 }
 $configPath = Join-Path $WorkDir 'harness.json'
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 3), $utf8)

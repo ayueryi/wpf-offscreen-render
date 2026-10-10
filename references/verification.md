@@ -55,7 +55,15 @@ Get-Content -LiteralPath (Join-Path $outDir 'binding-errors.txt')
 | 原生视口或菜单缺失 | 见下方[已知限制](#已知限制) |
 | 多次输出不稳定 | 主题静态状态、动画、当前时间、随机数据、字体、异步未就绪 |
 | 构建输出被锁定 | 使用独立 harness / 临时输出；不要擅自结束正在运行的业务程序 |
+| MCP 服务器连接失败 | `pwsh` 与 `dotnet` 是否在 PATH 中；首次编译是否能访问 NuGet（见上文离线说明）；编译输出在代理的 MCP 日志（stderr）中 |
+| 结束前自动验证没有触发 | 是否 `verifyOnStop: true`、是否已用 `trust-project.ps1` 授权且授权后未修改配置（`-List` 查看）、改动的文件是否命中 `watch`、改动是否已提交（hook 只看未提交的改动） |
 | 超时（`error.txt` 提示超过 N 秒） | 就绪信号永不完成、UI 线程被同步阻塞；必要时调大 `-TimeoutSeconds` 定位 |
+
+## 离线与内网环境
+
+- **MCP 服务器**：首次启动时 `mcp/start.ps1` 需要从 NuGet 还原 `ModelContextProtocol`。离线机器上可以先在联网的同版本环境中启动一次（或运行 `tests/run-tests.ps1 -Filter mcp-server`），再把 `%LOCALAPPDATA%\wpf-offscreen-render\mcp\<哈希>` 整个目录复制到离线机器的相同位置；哈希由服务器源码决定，插件版本相同即可复用。也可以通过 `WPF_RENDER_MCP_CACHE` 指定缓存目录。
+- **.NET Framework 宿主**：需要安装对应版本的 .NET Framework Developer Pack；未安装时 SDK 会尝试从 NuGet 还原引用程序集。
+- **业务程序集的 NuGet 依赖**：指向应用（exe）的输出目录时依赖已在目录中，不需要联网。
 
 ## 已知限制
 

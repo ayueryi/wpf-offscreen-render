@@ -2,7 +2,8 @@
 # Stop hook（Claude Code 插件自动启用；Codex 可按 templates/codex-hooks.json 配置）：
 # 代理结束本轮前，若改动了 wpf-render.json 中 watch 覆盖的文件，先构建再渲染受影响的视图；
 # 有渲染失败或绑定问题时输出 {"decision":"block","reason":...}，让代理继续修复。
-# 只在业务项目的 wpf-render.json 设置 "verifyOnStop": true 时生效；同一份改动只验证一次。
+# 只在业务项目的 wpf-render.json 设置 "verifyOnStop": true、且用户用 scripts/trust-project.ps1 授权过该配置时生效；
+# 同一份改动只验证一次。
 $ErrorActionPreference = 'Stop'
 
 function Exit-Quietly { exit 0 }
@@ -19,6 +20,25 @@ if (-not $dir) { Exit-Quietly }
 $configPath = Join-Path $dir 'wpf-render.json'
 $config = try { Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable } catch { $null }
 if (-not $config -or $config.verifyOnStop -ne $true -or -not $config.views) { Exit-Quietly }
+
+# hook 会执行仓库配置的 build 命令并运行业务程序集：未经用户授权（或授权后配置被修改）时不执行，
+# 每个会话只提示一次如何授权。
+. (Join-Path $PSScriptRoot '..\scripts\TrustStore.ps1')
+$trust = Get-ProjectTrust $configPath
+if ($trust -ne 'trusted') {
+    $noticeDir = Join-Path ([IO.Path]::GetTempPath()) 'wpf-render-hook'
+    $null = New-Item -ItemType Directory -Path $noticeDir -Force
+    $sessionKey = if ($hookInput.session_id) { $hookInput.session_id -replace '[^\w-]', '_' } else { 'default' }
+    $notice = Join-Path $noticeDir "$sessionKey.notice"
+    if (-not (Test-Path -LiteralPath $notice)) {
+        Set-Content -LiteralPath $notice -Value $configPath
+        $why = if ($trust -eq 'changed') { 'wpf-render.json 在授权后被修改过' } else { '这个项目还没有授权' }
+        $trustScript = Join-Path $PSScriptRoot '..\scripts\trust-project.ps1'
+        [ordered]@{ systemMessage = "wpf-offscreen-render：$configPath 启用了结束前自动验证，但$why，本次跳过。确认信任后运行：pwsh -File `"$([IO.Path]::GetFullPath($trustScript))`" -Path `"$configPath`"" } |
+            ConvertTo-Json -Compress
+    }
+    exit 0
+}
 
 # 未提交的改动（含未跟踪文件），统一成正斜杠绝对路径。porcelain 输出中的路径相对于仓库根目录。
 $repoRoot = & git -C $dir rev-parse --show-toplevel 2>$null

@@ -15,13 +15,15 @@ function Assert-Path([string]$Relative, [string]$Owner) {
 
 $claude = Read-Json '.claude-plugin/plugin.json'
 $codex = Read-Json '.codex-plugin/plugin.json'
-$mcp = Read-Json '.mcp.json'
+$mcp = Read-Json 'codex.mcp.json'
 $codexMarket = Read-Json '.agents/plugins/marketplace.json'
 $claudeMarket = Read-Json '.claude-plugin/marketplace.json'
 [xml]$project = Get-Content -LiteralPath (Join-Path $root 'mcp/WpfRenderMcp/WpfRenderMcp.csproj') -Raw
 $serverVersion = "$($project.Project.PropertyGroup.Version)".Trim()
 $toolVersion = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -TotalCount 1).Trim()
 if ($serverVersion -ne $toolVersion) { $failures.Add("VERSION（$toolVersion）与 MCP 服务器版本 $serverVersion 不一致") }
+$badge = [regex]::Match((Get-Content -LiteralPath (Join-Path $root 'README.md') -Raw), 'badge/version-([0-9][0-9.]*)-')
+if (-not $badge.Success -or $badge.Groups[1].Value -ne $toolVersion) { $failures.Add("README 版本徽章（$($badge.Groups[1].Value)）与 VERSION（$toolVersion）不一致") }
 
 if ($claude -and $codex) {
     foreach ($pair in @(@('name', $claude.name, $codex.name), @('version', $claude.version, $codex.version))) {

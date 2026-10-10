@@ -188,6 +188,8 @@ try {
     catch [Threading.AbandonedMutexException] { } # 上一个持有者异常退出，锁已转交
 
     $stampPath = Join-Path $workDir 'cache.json'
+    # 立即标记为“正在使用”，避免其他进程按过期时间清理这个目录。
+    if (Test-Path -LiteralPath $stampPath) { (Get-Item -LiteralPath $stampPath).LastWriteTime = Get-Date }
     # 构建会连同依赖一起复制，所以记录业务程序集所在目录中全部 dll / exe 的大小与修改时间。
     $stamps = @($assemblies | ForEach-Object { Split-Path -Parent $_ } | Sort-Object -Unique |
         ForEach-Object { Get-ChildItem -LiteralPath $_ -File | Where-Object Extension -in '.dll', '.exe' } |
@@ -207,6 +209,7 @@ try {
             dataContextType = if ($DataContextType) { $DataContextType } else { $null }
             dataContextFactory = if ($DataContextFactory) { $DataContextFactory } else { $null }
             resourceDictionaries = @($ResourceDictionary)
+            assemblies = @($assemblies | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_) })
         }
         [IO.File]::WriteAllText((Join-Path $workDir 'harness.json'), ($harnessConfig | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
         Copy-Item -LiteralPath $factorySource -Destination (Join-Path $workDir 'ViewFactory.cs') -Force
@@ -227,13 +230,22 @@ finally {
     $mutex.Dispose()
 }
 
-# 清理过期缓存与渲染结果；正在使用的宿主（本次的 $workDir）不受影响。
+# 清理过期缓存与渲染结果。只删除能立即拿到互斥量的目录：拿不到说明另一个进程正在使用它。
 $cutoff = (Get-Date).AddDays(-$RetentionDays)
 foreach ($dir in Get-ChildItem -LiteralPath $CacheRoot -Directory) {
     if ($dir.FullName -eq $workDir) { continue }
     $stamp = Join-Path $dir.FullName 'cache.json'
     $lastUsed = if (Test-Path -LiteralPath $stamp) { (Get-Item -LiteralPath $stamp).LastWriteTime } else { $dir.LastWriteTime }
-    if ($lastUsed -lt $cutoff) { Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($lastUsed -ge $cutoff) { continue }
+    $lock = [Threading.Mutex]::new($false, "Local\wpf-render-$($dir.Name)")
+    try {
+        $acquired = try { $lock.WaitOne(0) } catch [Threading.AbandonedMutexException] { $true }
+        if ($acquired) {
+            try { Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+            finally { $lock.ReleaseMutex() }
+        }
+    }
+    finally { $lock.Dispose() }
 }
 Get-ChildItem -LiteralPath $workDir -Directory | Where-Object { $_.Name -like 'render-*' -or $_.Name -like 'matrix-*' } |
     Where-Object { $_.LastWriteTime -lt $cutoff } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
