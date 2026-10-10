@@ -38,16 +38,19 @@ function ConvertTo-Regex([string]$Pattern) {
     "^$escaped$"
 }
 $defaults = if ($config.defaults) { $config.defaults } else { @{} }
+$relevant = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $affected = @(foreach ($name in $config.views.Keys) {
         $view = $config.views[$name]
         $watch = @(if ($view.watch) { $view.watch } elseif ($defaults.watch) { $defaults.watch })
         $regexes = @($watch | Where-Object { $_ } | ForEach-Object { ConvertTo-Regex $_ })
-        if ($regexes | Where-Object { $regex = $_; $changed | Where-Object { $_ -match $regex } }) { $name }
+        $hits = @($changed | Where-Object { $path = $_; $regexes | Where-Object { $path -match $_ } })
+        if ($hits.Count -gt 0) { $hits | ForEach-Object { $null = $relevant.Add($_) }; $name }
     })
 if ($affected.Count -eq 0) { Exit-Quietly }
 
-# 同一份改动（路径与内容）只验证一次，避免代理确认无法修复后被反复拦截。
-$fingerprintSource = ($changed | Sort-Object | ForEach-Object {
+# 同一份改动只验证一次，避免代理确认无法修复后被反复拦截。只对命中 watch 的文件（路径与内容）计算指纹，
+# 构建产物等其他变化不影响判断。
+$fingerprintSource = ($relevant | Sort-Object | ForEach-Object {
         $_ + ':' + $(if (Test-Path -LiteralPath $_ -PathType Leaf) { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash } else { 'deleted' })
     }) -join "`n"
 $fingerprint = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($fingerprintSource))) -Algorithm SHA256).Hash
