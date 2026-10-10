@@ -20,6 +20,8 @@ $codexMarket = Read-Json '.agents/plugins/marketplace.json'
 $claudeMarket = Read-Json '.claude-plugin/marketplace.json'
 [xml]$project = Get-Content -LiteralPath (Join-Path $root 'mcp/WpfRenderMcp/WpfRenderMcp.csproj') -Raw
 $serverVersion = "$($project.Project.PropertyGroup.Version)".Trim()
+$toolVersion = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -TotalCount 1).Trim()
+if ($serverVersion -ne $toolVersion) { $failures.Add("VERSION（$toolVersion）与 MCP 服务器版本 $serverVersion 不一致") }
 
 if ($claude -and $codex) {
     foreach ($pair in @(@('name', $claude.name, $codex.name), @('version', $claude.version, $codex.version))) {

@@ -132,6 +132,7 @@ flowchart LR
 ```text
 wpf-offscreen-render/
 ├── README.md                     # 本文档
+├── VERSION / CHANGELOG.md        # 版本号与更新日志
 ├── .claude-plugin/               # Claude Code 插件清单（plugin.json）与市场清单（marketplace.json）
 ├── .codex-plugin/plugin.json     # Codex 插件清单
 ├── .agents/plugins/marketplace.json  # Codex 市场清单
