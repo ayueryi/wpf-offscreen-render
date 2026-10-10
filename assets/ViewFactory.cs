@@ -5,9 +5,11 @@ using System.Windows.Media;
 
 internal static class ViewFactory
 {
-    // 在生成的临时工程中替换本方法；先配置资源，再创建真实 View 并设置 DataContext。
+    // 生成器传了 -ViewType / -Xaml 时由 harness.json 创建视图；否则在生成的临时工程中替换下方样例，
+    // 先配置资源，再创建真实 View 并设置 DataContext。
     public static FrameworkElement Create(string theme)
     {
+        if (ConfiguredView.TryCreate(theme) is { } configured) return configured;
         var dark = theme == "dark";
         var panel = new StackPanel { Margin = new Thickness(32) };
         var title = new TextBlock

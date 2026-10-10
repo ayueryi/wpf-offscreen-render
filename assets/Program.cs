@@ -17,8 +17,14 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        string Value(string key) => args[Array.IndexOf(args, key) + 1];
+        string? Optional(string key)
+        {
+            var index = Array.IndexOf(args, key);
+            return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+        }
+        string Value(string key) => Optional(key) ?? throw new ArgumentException($"缺少参数 {key}");
         var outDir = Path.GetFullPath(Value("--out"));
+        ConfiguredView.ConfigPath = Optional("--config");
         Directory.CreateDirectory(outDir);
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var exitCode = 1;
@@ -86,7 +92,15 @@ internal static class Program
 
                 var pixelWidth = (int)Math.Ceiling(width * dpi / 96.0);
                 var pixelHeight = (int)Math.Ceiling(height * dpi / 96.0);
+                var (background, backgroundSource) = ResolveBackground(Optional("--background") ?? "auto", theme, window, view is Window);
                 var bitmap = new RenderTargetBitmap(pixelWidth, pixelHeight, dpi, dpi, PixelFormats.Pbgra32);
+                if (background is not null)
+                {
+                    // RenderTargetBitmap 会叠加多次 Render，先铺底色避免透明 PNG 在查看器中显示为黑底。
+                    var fill = new DrawingVisual();
+                    using (var dc = fill.RenderOpen()) dc.DrawRectangle(background, null, new Rect(0, 0, width, height));
+                    bitmap.Render(fill);
+                }
                 bitmap.Render(root);
                 var pngPath = Path.Combine(outDir, "snapshot.png");
                 var encoder = new PngBitmapEncoder();
@@ -100,6 +114,7 @@ internal static class Program
                     sourceViewType = view.GetType().FullName,
                     theme, widthDip = width, heightDip = height, pixelWidth, pixelHeight, dpi,
                     actualWidthDip = root.ActualWidth, actualHeightDip = root.ActualHeight,
+                    background = background?.ToString() ?? "transparent", backgroundSource,
                     bindingTraceVerified = listener.SelfCheckHit,
                     bindingWarningOrErrorCount = listener.Errors.Count,
                     image = "snapshot.png",
@@ -149,6 +164,20 @@ internal static class Program
         });
         app.Run();
         return exitCode;
+    }
+
+    // auto：业务窗口或被样式 / 本地值设置过 Background 的承载窗口取其背景，否则按主题标签取中性底色；
+    // transparent：保留 alpha；其余按 WPF 颜色解析。宿主自建窗口的系统默认白底不代表业务外观，不采用。
+    private static (Brush? Brush, string Source) ResolveBackground(string value, string theme, Window? window, bool businessWindow)
+    {
+        if (value.Equals("transparent", StringComparison.OrdinalIgnoreCase)) return (null, "transparent");
+        if (!value.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            return ((Brush)new BrushConverter().ConvertFromInvariantString(value)!, "explicit");
+        if (window?.Background is { } windowBrush && !(windowBrush is SolidColorBrush { Color.A: 0 })
+            && (businessWindow || DependencyPropertyHelper.GetValueSource(window, Control.BackgroundProperty).BaseValueSource
+                > BaseValueSource.DefaultStyleTrigger))
+            return (windowBrush, "window");
+        return (theme == "dark" ? new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x1E)) : Brushes.White, "theme-fallback");
     }
 
     private static async Task IdleAsync()
