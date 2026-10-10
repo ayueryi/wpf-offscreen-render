@@ -4,7 +4,7 @@
 
 - 不启动业务程序，不抢焦点，不弹窗口，不出现在任务栏。
 - 使用真实控件、真实样式、确定的样例数据，而不是手绘 mock。
-- 每次渲染附带 `manifest.json`（尺寸 / DPI / SHA256 / 绑定统计）和 `binding-errors.txt`，绑定错误直接体现在退出码上；执行器最后打印 JSON 摘要（`summary.json`），一次调用即可拿到结论。
+- 每次渲染附带 `manifest.json`（尺寸 / DPI / SHA256 / 绑定统计）、逐条解析的绑定错误和布局检查结果（文本截断、被裁切、重叠、尺寸为 0、超出视口）；绑定错误直接体现在退出码上，执行器最后打印 JSON 摘要（`summary.json`），一次调用即可拿到结论。
 - 常见页面免写代码：`-ViewType` / `-Xaml` + `-ResourceDictionary`（支持 `{theme}` 占位）直接渲染业务控件。
 - 不依赖任何 Gallery、业务框架或特定 UI 库；支持 .NET Framework 4.7.2 / 4.8 / 4.8.1 与 .NET 5 – 10 的 WPF，只需要 .NET SDK 与 PowerShell 7。
 - 仓库本身也是一个 Agent Skill（`SKILL.md`），可直接放入 `.agents/skills/` 供 Codex / Claude Code 等代理调用。
@@ -65,30 +65,28 @@ $PSVersionTable.PSVersion
 git clone https://github.com/ayueryi/wpf-offscreen-render.git
 cd wpf-offscreen-render
 
-# 1. 在 %TEMP% 下生成一个独立的临时渲染工程（自带可运行样例）
-#    未引用业务程序集时默认 net8.0-windows；引用后按程序集自动推断，也可显式传 -TargetFramework net48 等
-$harness = & .\scripts\new-wpf-harness.ps1
-
-# 2. 构建并渲染
-$outDir = & .\scripts\invoke-wpf-render.ps1 -HarnessDir $harness.WorkDir -Theme light
+# 1. 一步渲染内置样例（生成或复用缓存宿主 → 构建 → 渲染 → 打印 JSON 摘要）
+$outDir = & .\scripts\render.ps1 -Theme light
 if ($LASTEXITCODE -ne 0) { throw "渲染或绑定检查失败：$outDir" }
 
+# 2. 渲染真实页面：TFM 与位数按程序集自动推断；同一组程序集第二次起跳过构建
+$outDir = & .\scripts\render.ps1 -AssemblyPath 'C:\work\MyApp\bin\Debug\net8.0-windows\MyUi.dll' `
+    -ViewType MyUi.Views.OrderView -DataContextType MyUi.Preview.OrderPreviewVm -Theme dark -Dpi 144
+
 # 3. 查看结果
-Get-ChildItem $outDir
+Get-Content (Join-Path $outDir 'summary.json')
 Invoke-Item (Join-Path $outDir 'snapshot.png')
 ```
 
-常用变体：
+需要定制视图创建过程（构造参数、stub 服务、等待异步就绪）时改用两步：
 
 ```powershell
-# 暗色、指定视口、高 DPI，复用已构建的工程
-& .\scripts\invoke-wpf-render.ps1 -HarnessDir $harness.WorkDir -Theme dark -Width 1280 -Height 800 -Dpi 144 -NoBuild
-
-# 需要 Loaded / PresentationSource / 窗口祖先的页面
-& .\scripts\invoke-wpf-render.ps1 -HarnessDir $harness.WorkDir -WindowHost -Width 1100 -Height 760
+$harness = & .\scripts\new-wpf-harness.ps1 -AssemblyPath $myUiDll   # 生成工程，之后修改其中的 ViewFactory.cs
+& .\scripts\invoke-wpf-render.ps1 -HarnessDir $harness.WorkDir -Theme dark -Width 1280 -Height 800
+& .\scripts\invoke-wpf-render.ps1 -HarnessDir $harness.WorkDir -WindowHost -NoBuild   # 代码未变时跳过构建
 ```
 
-渲染**真实页面**：简单页面用生成器的 `-ViewType` / `-Xaml` 参数即可，复杂页面修改生成工程中的 `ViewFactory.cs`，见 [接入真实界面](#接入真实界面)。
+详见 [接入真实界面](#接入真实界面)。
 
 ---
 
@@ -109,7 +107,7 @@ flowchart LR
     J --> L[WaitUntilReadyAsync]
     K --> L
     L --> M[RenderTargetBitmap → PNG]
-    M --> N[manifest.json<br/>binding-errors.txt]
+    M --> N[manifest.json / layout.json<br/>binding-errors.json]
 ```
 
 渲染宿主 `Program.cs` 的关键步骤：
@@ -122,7 +120,7 @@ flowchart LR
    - `window-host`：用 `Window` 承载（或直接使用工厂返回的 `Window`），放到屏幕外 `(-20000, -20000)`，`ShowActivated=false`、`ShowInTaskbar=false`、`WindowStyle=None`、`ResizeMode=NoResize`，然后 `Show()`，截取 `Window.Content`。
 5. `await ViewFactory.WaitUntilReadyAsync(view)` 等待业务就绪信号，再跑一轮 `ContextIdle` + `UpdateLayout`。
 6. `RenderTargetBitmap(ceil(W×DPI/96), ceil(H×DPI/96), DPI, DPI, Pbgra32)` 渲染并编码 PNG。
-7. 写出 `manifest.json`、`binding-errors.txt`；调用 `ViewFactory.Cleanup`、关闭自己创建的窗口，然后以退出码结束进程。
+7. 遍历视觉树写出 `layout.json`（元素坐标与布局问题），写出 `manifest.json`、`binding-errors.txt` / `.json`；调用 `ViewFactory.Cleanup`、关闭自己创建的窗口，然后以退出码结束进程。
 
 执行器 `invoke-wpf-render.ps1` 只负责：构建（可跳过）→ 以独立子进程启动宿主 → 超时控制 → 收集 stdout / stderr 日志 → 回传退出码与输出目录。它**只会终止自己启动的渲染子进程**。
 
@@ -139,10 +137,13 @@ wpf-offscreen-render/
 ├── assets/                       # 渲染宿主模板，生成器原样复制到临时工程
 │   ├── Program.cs                # STA 宿主：绑定监听、布局、RenderTargetBitmap、manifest
 │   ├── ConfiguredView.cs         # 读取 harness.json：按类型名 / 松散 XAML 创建视图、合并资源字典
+│   ├── Diagnostics.cs            # 绑定错误解析与布局检查（layout.json）
+│   ├── Json.cs                   # 不依赖 NuGet 的 JSON 写入器（兼容 .NET Framework）
 │   └── ViewFactory.cs            # 需要定制时唯一要改的文件（默认先走 harness.json，再走样例）
 ├── scripts/
 │   ├── new-wpf-harness.ps1       # 生成临时渲染工程
-│   └── invoke-wpf-render.ps1     # 构建 + 渲染 + 收集产物
+│   ├── invoke-wpf-render.ps1     # 构建 + 渲染 + 收集产物
+│   └── render.ps1                # 一步渲染：生成或复用缓存宿主后调用上面两个脚本
 ├── references/
 │   ├── integration.md            # 接入真实界面的详细说明
 │   └── verification.md           # 验收、基线比较、故障定位、性能边界
@@ -187,6 +188,18 @@ wpf-offscreen-render/
 
 宿主源码只使用 .NET Framework 4.7.2 与 .NET 5+ 共有的 API（不依赖 `System.Text.Json` 等 NuGet 包），同一份 `Program.cs` / `ConfiguredView.cs` / `ViewFactory.cs` 适用于全部 TFM。定制 `ViewFactory.cs` 时同样只能用目标 TFM 存在的 API。.NET 5 / 6 / 7 已停止支持，构建时会出现 `NETSDK1138` 警告，不影响渲染。
 
+### `scripts/render.ps1`
+
+一步渲染，适合免代码接入。参数是 `new-wpf-harness.ps1` 的视图 / 程序集参数（`-AssemblyPath`、`-ViewType`、`-Xaml`、`-DataContextType`、`-ResourceDictionary`、`-TargetFramework`、`-Platform`）加上 `invoke-wpf-render.ps1` 的渲染参数（`-Width`、`-Height`、`-Dpi`、`-Theme`、`-Background`、`-WindowHost`、`-TimeoutSeconds`），另有：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `-CacheRoot` | `%TEMP%\wpf-render-cache` | 缓存宿主所在目录 |
+| `-NoCache` | 关 | 生成一次性宿主，不读写缓存 |
+| `-RetentionDays` | `7` | 超过该天数未使用的缓存宿主与渲染结果会被删除 |
+
+缓存键由程序集路径、`-TargetFramework` / `-Platform` 与工具版本（生成器和 `assets/*.cs` 的哈希）组成；视图参数每次重写 `harness.json`。业务程序集所在目录中任一 dll / exe 的大小或修改时间变化时重新构建，否则跳过构建。同一缓存宿主用系统互斥量串行化，多个代理并发调用也不会同时构建。输出与退出码同 `invoke-wpf-render.ps1`。
+
 ### `scripts/invoke-wpf-render.ps1`
 
 构建（输出到工程内 `out\`）并渲染一次，打印 JSON 摘要，输出目录路径写入管道，退出码写入 `$LASTEXITCODE`。
@@ -228,10 +241,24 @@ wpf-offscreen-render/
 | `snapshot.png` | 渲染成功（含存在绑定错误时） | 目标视觉快照 |
 | `manifest.json` | 渲染成功 | 元数据，见下表 |
 | `binding-errors.txt` | 宿主正常结束 | 去重后的真实绑定告警 / 错误，每条一行；为空表示无问题（前提是自检通过） |
+| `binding-errors.json` | 宿主正常结束 | 同上，逐条解析出 `targetElement` / `targetName` / `targetProperty` / `path` / `dataItem` / `reason` 与单行 `summary` |
+| `layout.json` | 渲染成功 | 视觉树中每个可见 `FrameworkElement` 的类型、名称、相对根元素的矩形与文本（最多 3000 个），以及布局问题 `issues` |
 | `build.log` | 未使用 `-NoBuild` | `dotnet build` 完整输出 |
 | `render.stdout.log` / `render.stderr.log` | 子进程启动后 | 宿主标准输出 / 错误 |
 | `error.txt` | 失败时 | 异常堆栈、自检失败或超时说明 |
-| `summary.json` | 总是 | 结论摘要：`status`（`ok` / `binding-issues` / `failed:build` / `failed:locate` / `failed:render`）、`snapshot`、`sourceViewType`、尺寸、衬底、前 5 条绑定问题、编译错误、异常前 15 行；同时打印到控制台 |
+| `summary.json` | 总是 | 结论摘要：`status`（`ok` / `binding-issues` / `failed:build` / `failed:locate` / `failed:render`）、`snapshot`、`sourceViewType`、尺寸、衬底、前 5 条绑定问题（`bindingIssues`，解析后的单行结论）、布局问题条数与前 10 条（`layoutIssueCount` / `layoutIssues`）、编译错误、异常前 15 行；同时打印到控制台 |
+
+`layout.json` 的布局问题（只检查有文本的 `TextBlock`、有图像的 `Image` 与 `Control`，容器本身不报告）：
+
+| `kind` | 含义 | 不会报告的情况 |
+| --- | --- | --- |
+| `text-truncated` | 文本按当前字体放不下（不换行时比较宽度，换行时比较高度），含已显示省略号的情况 | — |
+| `clipped` | 元素被父容器的布局空间裁掉一部分（父容器尺寸小于内容） | `ScrollViewer` 视口、`ClipToBounds`、显式 `Clip` 造成的裁切 |
+| `overlap` | 两段文本的墨迹区域互相覆盖（按文本对齐计算实际字形范围） | 同一单元格中左右 / 居中对齐、字形不相交的文本 |
+| `zero-size` | 有内容的元素宽或高为 0 | `Visibility` 不是 `Visible` 的元素及其子树 |
+| `out-of-viewport` | 元素可见部分超出 `-Width` × `-Height` 视口 | 滚动区域内被视口裁掉的部分 |
+
+布局问题是给代理和人的线索，不影响退出码；祖先已报告 `clipped` / `out-of-viewport` 时后代不再重复报告。
 
 `manifest.json` 示例（640×260 DIP、144 DPI、window-host、dark）：
 
@@ -251,6 +278,8 @@ wpf-offscreen-render/
   "background": "#FF1E1E1E",
   "backgroundSource": "theme-fallback",
   "bindingTraceVerified": true,
+  "layoutIssueCount": 0,
+  "layoutReportError": null,
   "image": "snapshot.png",
   "sha256": "bafb482d…",
   "targetFramework": ".NETCoreApp,Version=v8.0",
@@ -272,6 +301,7 @@ wpf-offscreen-render/
 | `pixelWidth` / `pixelHeight` / `dpi` | 实际位图尺寸与 DPI |
 | `actualWidthDip` / `actualHeightDip` | 根元素布局后的实际尺寸；与请求不一致说明有约束或布局问题 |
 | `bindingTraceVerified` | 绑定监听自检是否命中；`false` 时绑定统计不可信 |
+| `layoutIssueCount` / `layoutReportError` | 布局问题条数；布局检查自身出错时记录原因（不影响渲染与退出码） |
 | `bindingWarningOrErrorCount` | 真实绑定问题条数（排除自检标记） |
 | `background` / `backgroundSource` | 实际衬底颜色与来源（`window` / `theme-fallback` / `explicit` / `transparent`）；衬底不代表业务背景 |
 | `sha256` | PNG 字节哈希，用于快速判断是否完全一致 |
@@ -487,7 +517,9 @@ $after  = Get-Content (Join-Path $outDir 'manifest.json') -Raw | ConvertFrom-Jso
 | --- | --- |
 | 渲染模式、主题、DPI、衬底 | `sample-light`、`sample-dark-dpi144`、`sample-window-host`、`sample-transparent` |
 | 免代码接入 | `xaml-ok`、`net8-view`、`net472-view` |
-| 绑定错误检出（退出码 2） | `xaml-binding-error`、`net8-broken-binding`、`net472-broken-binding` |
+| 绑定错误检出（退出码 2）与解析 | `xaml-binding-error`、`net8-broken-binding`、`net472-broken-binding` |
+| 布局检查：五类问题全部检出、正常布局零误报 | `net8-layout-problems`、`net472-layout-problems`、`net8-scroll-no-false-positive`，以及正常视图的 `layoutIssueCount = 0` |
+| 一步脚本缓存：首次构建、再次跳过、程序集变化后重建 | `render-cache` |
 | TFM / 位数推断 | `net472-view`（AnyCPU → 64 位）、`net472-x86-view`（x86）、`sample-net10` |
 | 生成器拒绝不兼容组合 | `reject-mixed-runtimes`、`reject-lower-tfm`、`reject-platform-conflict` |
 

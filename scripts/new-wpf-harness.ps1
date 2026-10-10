@@ -167,9 +167,7 @@ $config = [ordered]@{
 }
 $configPath = Join-Path $WorkDir 'harness.json'
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 3), $utf8)
-$assetRoot = Join-Path $PSScriptRoot '..\assets'
-Copy-Item -LiteralPath (Join-Path $assetRoot 'Program.cs'), (Join-Path $assetRoot 'ViewFactory.cs'),
-    (Join-Path $assetRoot 'ConfiguredView.cs') -Destination $WorkDir
+Copy-Item -Path (Join-Path $PSScriptRoot '..\assets\*.cs') -Destination $WorkDir
 [pscustomobject]@{
     WorkDir = $WorkDir; ProjectPath = Join-Path $WorkDir 'RenderHarness.csproj'; ConfigPath = $configPath
     TargetFramework = $TargetFramework; Platform = $Platform

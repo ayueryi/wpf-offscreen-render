@@ -34,6 +34,55 @@ namespace SampleViews
         }
     }
 
+    // 每类布局问题各一处：布局检查应分别报告 text-truncated、clipped、overlap、zero-size、out-of-viewport。
+    public sealed class LayoutProblemsView : UserControl
+    {
+        public LayoutProblemsView()
+        {
+            var panel = new StackPanel { Margin = new Thickness(16) };
+            panel.Children.Add(new TextBlock { Name = "TruncatedTitle", Width = 80, FontSize = 16, Text = "This title is far too long for its box" });
+
+            var narrow = new StackPanel { Orientation = Orientation.Horizontal, Width = 200, HorizontalAlignment = HorizontalAlignment.Left };
+            narrow.Children.Add(new Button { Name = "ClippedButton", Width = 300, Content = "Clipped" });
+            panel.Children.Add(narrow);
+
+            var cell = new Grid();
+            cell.Children.Add(new TextBlock { Name = "OverlapA", Text = "Overlapping text A" });
+            cell.Children.Add(new TextBlock { Name = "OverlapB", Text = "Overlapping text B", Margin = new Thickness(20, 4, 0, 0) });
+            panel.Children.Add(cell);
+
+            panel.Children.Add(new TextBlock { Name = "ZeroSizeText", Width = 0, Text = "Invisible" });
+
+            var canvas = new Canvas { Height = 40 };
+            var offscreen = new TextBlock { Name = "OffscreenNote", Text = "Offscreen note" };
+            Canvas.SetLeft(offscreen, 1250);
+            canvas.Children.Add(offscreen);
+            panel.Children.Add(canvas);
+
+            Content = new Border { Background = Brushes.White, Child = panel };
+        }
+    }
+
+    // 布局检查的反例：滚动区域内超出视口的行、同一单元格中左右对齐的文本都属正常，不应报告任何问题。
+    public sealed class ScrollListView : UserControl
+    {
+        public ScrollListView()
+        {
+            var dock = new DockPanel { Margin = new Thickness(16) };
+            var header = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            header.Children.Add(new TextBlock { Text = "Orders", FontSize = 20 });
+            header.Children.Add(new TextBlock { Text = "60 items", FontSize = 20, TextAlignment = TextAlignment.Right });
+            DockPanel.SetDock(header, Dock.Top);
+            dock.Children.Add(header);
+
+            var rows = new StackPanel();
+            for (var i = 1; i <= 60; i++) rows.Children.Add(new TextBlock { Text = "Row " + i, Margin = new Thickness(0, 2, 0, 2) });
+            dock.Children.Add(new ScrollViewer { Height = 300, VerticalAlignment = VerticalAlignment.Top, Content = rows });
+
+            Content = new Border { Background = Brushes.White, Child = dock };
+        }
+    }
+
     // 故意把 Customer 拼错，渲染应以退出码 2 报告绑定问题。
     public sealed class BrokenBindingView : OrderView
     {
