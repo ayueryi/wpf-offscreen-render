@@ -79,6 +79,18 @@
 
 额外保护：输出像素总数超过 6000 万（例如 6000×6000 DIP @ 192 DPI）时直接拒绝执行。
 
+### `scripts/trust-project.ps1`
+
+授权业务项目的 `wpf-render.json`，使结束前自动验证（Stop hook）生效。
+
+| 用法 | 说明 |
+| --- | --- |
+| `trust-project.ps1 [-Path <目录或文件>]` | 授权当前目录（或向上最近）的 `wpf-render.json`，并列出 hook 将执行的构建命令 |
+| `trust-project.ps1 -List` | 列出已授权的配置及状态（已授权 / 授权后已修改 / 文件不存在） |
+| `trust-project.ps1 -Revoke [-Path …]` | 撤销授权 |
+
+授权记录默认在 `%LOCALAPPDATA%\wpf-offscreen-render\trusted-projects.json`（可用环境变量 `WPF_RENDER_TRUST_FILE` 改位置），绑定配置文件内容的 SHA256。
+
 ### `scripts/compare-snapshots.ps1`
 
 比较前后两次渲染，打印 JSON 结果。退出码：`0` 无差异（或在容差内），`1` 有差异。
@@ -116,7 +128,7 @@
 | `binding-errors.txt` | 宿主正常结束 | 去重后的真实绑定告警 / 错误，每条一行；为空表示无问题（前提是自检通过） |
 | `element.png` | 使用 `-Element` 且渲染成功 | 指定元素的截图，尺寸为元素的 `RenderSize` × DPI / 96 |
 | `binding-errors.json` | 宿主正常结束 | 同上，逐条解析出 `targetElement` / `targetName` / `targetProperty` / `path` / `dataItem` / `reason` 与单行 `summary` |
-| `layout.json` | 渲染成功 | 视觉树中每个可见 `FrameworkElement` 的类型、名称、相对根元素的矩形与文本（最多 3000 个），以及布局问题 `issues` |
+| `layout.json` | 渲染成功 | 视觉树中每个可见 `FrameworkElement` 的类型、名称、相对根元素的矩形与文本（最多 3000 个），以及布局问题 `issues`。节点矩形是元素需要的完整尺寸，被父容器或自身槽位裁掉的部分也包含在内；实际可见范围以 `issues` 中的说明为准 |
 | `build.log` | 未使用 `-NoBuild` | `dotnet build` 完整输出 |
 | `render.stdout.log` / `render.stderr.log` | 子进程启动后 | 宿主标准输出 / 错误 |
 | `error.txt` | 失败时 | 异常堆栈、自检失败或超时说明 |

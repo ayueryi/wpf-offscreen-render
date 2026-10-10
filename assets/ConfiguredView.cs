@@ -21,6 +21,7 @@ internal static class ConfiguredView
             config = (HarnessConfig?)new DataContractJsonSerializer(typeof(HarnessConfig)).ReadObject(stream) ?? new HarnessConfig();
         if (config.ViewType is not null && config.Xaml is not null)
             throw new InvalidOperationException("harness.json 中 viewType 与 xaml 只能二选一。");
+        businessAssemblies = config.Assemblies ?? [];
 
         foreach (var source in config.ResourceDictionaries ?? [])
         {
@@ -70,7 +71,10 @@ internal static class ConfiguredView
         return method.Invoke(null, null);
     }
 
-    // 支持程序集限定名，或仅写全名时在已加载程序集与输出目录 DLL 中查找。
+    private static string[] businessAssemblies = [];
+
+    // 支持程序集限定名；仅写全名时依次在已加载程序集、-AssemblyPath 指定的业务程序集、输出目录其余 DLL 中查找。
+    // 先查业务程序集，避免为找一个类型加载（并初始化）无关的依赖程序集。
     private static Type ResolveType(string name)
     {
         var type = Type.GetType(name, throwOnError: false);
@@ -80,7 +84,11 @@ internal static class ConfiguredView
             type = assembly.GetType(name, throwOnError: false);
             if (type is not null) return type;
         }
-        foreach (var dll in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll"))
+        var business = businessAssemblies.Select(assembly => Path.Combine(AppContext.BaseDirectory, assembly))
+            .SelectMany(path => new[] { path + ".dll", path + ".exe" }).Where(File.Exists).ToList();
+        var others = Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll")
+            .Where(path => !business.Contains(path, StringComparer.OrdinalIgnoreCase));
+        foreach (var dll in business.Concat(others))
         {
             try
             {
@@ -102,5 +110,7 @@ internal static class ConfiguredView
         [DataMember(Name = "dataContextType")] public string? DataContextType { get; set; }
         [DataMember(Name = "dataContextFactory")] public string? DataContextFactory { get; set; }
         [DataMember(Name = "resourceDictionaries")] public string[]? ResourceDictionaries { get; set; }
+        // -AssemblyPath 中业务程序集的文件名（不含扩展名），用于优先查找类型。
+        [DataMember(Name = "assemblies")] public string[]? Assemblies { get; set; }
     }
 }

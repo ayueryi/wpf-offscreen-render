@@ -26,7 +26,9 @@
 2. `dataContextFactory`：无参静态工厂方法，适合需要构造参数、stub 服务或填充样例数据的 ViewModel，例如在业务项目中放一个 `PreviewData.CreateOrderList()`。
 3. `factoryFile`：业务仓库中受版本管理的 `ViewFactory.cs`，替换宿主默认工厂；可以配置资源、等待异步就绪、设置选中态和清理。形状见下文“资源、主题和 DataContext”，三个方法签名不能改。工厂文件内容变化时宿主自动重新构建。
 
-**Stop hook 的行为**：代理结束本轮前，hook 从会话目录向上找到 `wpf-render.json`；`verifyOnStop` 为 `true` 时，用 `git status` 找出未提交的改动，渲染 `watch` 命中的视图（先执行一次 `build`）。有渲染失败或绑定错误时阻止结束，并把结论（视图、绑定路径、截图路径）交给代理继续修复；同一份改动只验证一次，代理确认无法修复时不会被反复拦截。没有 `wpf-render.json`、未启用或非 Windows 时立即退出。
+**授权**：Stop hook 会执行配置中的 `build` 命令并运行业务程序集，因此只对用户显式授权的配置生效。在本机运行 `scripts/trust-project.ps1 -Path <业务仓库目录>` 授权（`-List` 查看、`-Revoke` 撤销）；授权记录保存在 `%LOCALAPPDATA%\wpf-offscreen-render\trusted-projects.json`，绑定 `wpf-render.json` 的内容哈希，配置被修改后需要重新授权。未授权时 hook 不执行任何构建或渲染，每个会话只提示一次。
+
+**Stop hook 的行为**：代理结束本轮前，hook 从会话目录向上找到 `wpf-render.json`；`verifyOnStop` 为 `true` 且已授权时，用 `git status` 找出未提交的改动，渲染 `watch` 命中的视图（先执行一次 `build`）。有渲染失败或绑定错误时阻止结束，并把结论（视图、绑定路径、截图路径）交给代理继续修复；同一份改动只验证一次，代理确认无法修复时不会被反复拦截。没有 `wpf-render.json`、未启用或非 Windows 时立即退出。
 
 **代理规则**：把 [templates/agent-rules.md](../templates/agent-rules.md) 的内容加入业务仓库的 `AGENTS.md`（Codex 等）或 `CLAUDE.md`（Claude Code），约定修改界面后必须渲染验证并在回复中给出结论。
 
