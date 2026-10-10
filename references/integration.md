@@ -2,16 +2,24 @@
 
 ## 工程和程序集
 
-本工具的工程独立于业务仓库，只有 WPF 和 .NET 依赖。使用 Windows + PowerShell 7。`TargetFramework` 应与目标程序兼容：通常选目标项目的 TFM，确认 `dotnet --list-sdks`、`dotnet --list-runtimes` 同时提供所需 SDK / WindowsDesktop Runtime。
+本工具的工程独立于业务仓库，只有 WPF 和 .NET 依赖。使用 Windows + PowerShell 7。支持的宿主 TFM：`net472`、`net48`、`net481` 与 `net5.0-windows` … `net10.0-windows`（可带平台版本）。确认 `dotnet --list-sdks` 能构建该 TFM；.NET 宿主还需 `dotnet --list-runtimes` 中有对应的 WindowsDesktop Runtime，.NET Framework 宿主需本机已装对应版本的 .NET Framework，并有 Developer Pack 或 NuGet 访问来获取引用程序集。
 
-生成时引用已经构建的 DLL：
+生成时引用已经构建的程序集：
 
 ```powershell
 $harness = & "$skillRoot\scripts\new-wpf-harness.ps1" `
-    -TargetFramework net8.0-windows `
     -AssemblyPath 'C:\work\MyApp\bin\Debug\net8.0-windows\MyApp.dll', `
                   'C:\work\MyApp\bin\Debug\net8.0-windows\MyUi.dll'
+$harness | Select-Object TargetFramework, Platform
 ```
+
+省略 `-TargetFramework` / `-Platform` 时由生成器推断，规则如下：
+
+- TFM：读取每个程序集的 `TargetFrameworkAttribute`，取同类中的最高版本。低于 4.7.2 的 .NET Framework 程序集使用 `net472` 宿主；.NET Standard 程序集两类宿主都能引用，不参与推断；没有业务程序集时为 `net8.0-windows`。
+- 拒绝的情况：.NET Framework 与 .NET 程序集混用、面向 .NET Core 3.x 的程序集、显式 TFM 与程序集类别不同或版本更低。
+- 位数：读取 PE 头。x86 编译、C++/CLI 混合模式的程序集以及“首选 32 位”的 exe（VS 中 .NET Framework 程序的默认设置）需要 32 位进程，x64 / ARM64 编译的程序集需要对应进程；全是 AnyCPU 时宿主为 AnyCPU（64 位系统上以 64 位运行）。.NET Framework 宿主直接运行 `RenderHarness.exe`；.NET 宿主固定位数时启用 apphost，需安装该架构的 WindowsDesktop Runtime。
+
+.NET Framework WPF 程序的界面常常直接写在 `.exe` 里，`-AssemblyPath` 也接受 `.exe`。业务程序依赖 `App.config` 里的配置节时，在生成工程中新建 `App.config` 放入需要的部分；程序集版本的绑定重定向由 SDK 构建时自动生成到 `RenderHarness.exe.config`。
 
 这些路径只是示例，先确认实际程序集名称、版本、输出位置。生成器使用 XML 转义写入 HintPath，路径含空格可正常使用。生成的工程自带隔离用的 `Directory.Build.props` / `.targets` / `Directory.Packages.props`，因此 `-WorkDir` 即使放在业务仓库内，也不会继承上层构建配置。需要额外 NuGet 包、ProjectReference 或依赖 DLL 时修改生成的 `RenderHarness.csproj`。引用 DLL 并不保证所有运行时依赖、native DLL、内容文件都被复制；按错误补齐明确需要的依赖，保留它们的相对目录。不要对生产输出目录做覆盖或全量清理。
 
@@ -31,6 +39,7 @@ $harness = & "$skillRoot\scripts\new-wpf-harness.ps1" -AssemblyPath $myUiDll `
 - `-ViewType` / `-DataContextType`：可以写完整类型名（会在已加载程序集和输出目录的 DLL 中查找），也可以写程序集限定名 `Ns.Type, Assembly`。
 - `-Xaml`：松散 XAML 文件，与 `-ViewType` 二选一。不能写 `x:Class` 和事件处理器；业务控件通过 `xmlns:v="clr-namespace:MyUi.Views;assembly=MyUi"` 引用，对应程序集需在 `-AssemblyPath` 中。适合快速拼一个探针布局或组合多个控件。
 - `-ResourceDictionary`：按给定顺序合并到 `Application.Current.Resources`。支持 pack URI 或磁盘绝对路径，`{theme}` 替换为 `-Theme` 的值。
+- 手工编辑 `harness.json` 时键名区分大小写（`viewType`、`xaml`、`dataContextType`、`resourceDictionaries`）。
 - 这些参数都写入生成工程的 `harness.json`，渲染时才读取。修改它或 XAML 文件后，可以直接 `-NoBuild` 再渲染。
 
 超出上述条件时（VM 需要参数或 stub 服务、需要 Bootstrap、需要等待加载完成或设置选中态），按下文修改 `ViewFactory.cs`。默认的 `ViewFactory.Create` 会先尝试 `harness.json`，未配置视图时才走样例。整体替换 `ViewFactory.cs` 后，`harness.json` 中的视图配置就不再生效。

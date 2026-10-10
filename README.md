@@ -6,7 +6,7 @@
 - 使用真实控件、真实样式、确定的样例数据，而不是手绘 mock。
 - 每次渲染附带 `manifest.json`（尺寸 / DPI / SHA256 / 绑定统计）和 `binding-errors.txt`，绑定错误直接体现在退出码上；执行器最后打印 JSON 摘要（`summary.json`），一次调用即可拿到结论。
 - 常见页面免写代码：`-ViewType` / `-Xaml` + `-ResourceDictionary`（支持 `{theme}` 占位）直接渲染业务控件。
-- 不依赖任何 Gallery、业务框架或特定 UI 库；只需要 .NET 8+ WPF 与 PowerShell 7。
+- 不依赖任何 Gallery、业务框架或特定 UI 库；支持 .NET Framework 4.7.2 / 4.8 / 4.8.1 与 .NET 5 – 10 的 WPF，只需要 .NET SDK 与 PowerShell 7。
 - 仓库本身也是一个 Agent Skill（`SKILL.md`），可直接放入 `.agents/skills/` 供 Codex / Claude Code 等代理调用。
 
 | light（layout-only，96 DPI） | dark（layout-only，96 DPI） |
@@ -43,9 +43,10 @@
 | --- | --- |
 | 操作系统 | Windows（WPF 仅支持 Windows；`-WindowHost` 还需要交互式桌面会话） |
 | Shell | PowerShell 7+（`pwsh`），脚本带 `#requires -Version 7.0` |
-| .NET SDK | 能构建目标 TFM 的 SDK，例如 .NET 8 / 9 / 10 SDK |
-| 运行时 | 与目标 TFM 匹配的 `Microsoft.WindowsDesktop.App` |
-| 目标程序 | .NET 8 及以上 WPF。旧 .NET Framework 项目不能直接引用，需要另建 net48 宿主（流程可参照本工具） |
+| .NET SDK | 能构建目标 TFM 的 SDK，例如 .NET 8 / 9 / 10 SDK（SDK 可构建比自身版本低的 TFM，包括 .NET Framework） |
+| 运行时 | .NET 宿主：与 TFM 匹配的 `Microsoft.WindowsDesktop.App`；.NET Framework 宿主：已安装对应版本的 .NET Framework（Windows 10 / 11 自带 4.8 / 4.8.1） |
+| .NET Framework 引用程序集 | 已安装对应 Developer Pack，或可访问 NuGet（SDK 会自动还原 `Microsoft.NETFramework.ReferenceAssemblies`） |
+| 目标程序 | .NET Framework 4.7.2 / 4.8 / 4.8.1 或 .NET 5 – 10 的 WPF；更早的 .NET Framework 程序集由 net472 宿主引用。.NET Core 3.x 不支持 |
 
 自查命令：
 
@@ -64,7 +65,8 @@ git clone https://github.com/ayueryi/wpf-offscreen-render.git
 cd wpf-offscreen-render
 
 # 1. 在 %TEMP% 下生成一个独立的临时渲染工程（自带可运行样例）
-$harness = & .\scripts\new-wpf-harness.ps1 -TargetFramework net8.0-windows
+#    未引用业务程序集时默认 net8.0-windows；引用后按程序集自动推断，也可显式传 -TargetFramework net48 等
+$harness = & .\scripts\new-wpf-harness.ps1
 
 # 2. 构建并渲染
 $outDir = & .\scripts\invoke-wpf-render.ps1 -HarnessDir $harness.WorkDir -Theme light
@@ -96,7 +98,7 @@ flowchart LR
     A[new-wpf-harness.ps1] -->|生成| B["%TEMP%/wpf-render-GUID<br/>RenderHarness.csproj<br/>Program.cs + ViewFactory.cs"]
     B --> C[invoke-wpf-render.ps1]
     C -->|dotnet build| D[build.log]
-    C -->|启动子进程 + 超时控制| E[RenderHarness.dll]
+    C -->|启动子进程 + 超时控制| E[RenderHarness.exe / .dll]
     E --> F[STA + Application + Dispatcher]
     F --> G[绑定监听 + 自检探针]
     G --> H["ViewFactory.Create(theme)"]
@@ -155,13 +157,14 @@ wpf-offscreen-render/
 
 ### `scripts/new-wpf-harness.ps1`
 
-生成一个新的 `RenderHarness` 工程，返回 `[pscustomobject]@{ WorkDir; ProjectPath; ConfigPath }`。
+生成一个新的 `RenderHarness` 工程，返回 `[pscustomobject]@{ WorkDir; ProjectPath; ConfigPath; TargetFramework; Platform }`。
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `-TargetFramework` | string | `net8.0-windows` | 只接受 `net8.0-windows`、`net9.0-windows`、`net10.0-windows` 等 `netN.0-windows`（N ≥ 8）；应与目标程序 TFM 兼容 |
+| `-TargetFramework` | string | 自动 | `net472` / `net48` / `net481`，或 `net5.0-windows` … `net10.0-windows`（可带平台版本，如 `net8.0-windows10.0.19041.0`）。省略时读取 `-AssemblyPath` 的 `TargetFrameworkAttribute`：取同类中最高版本，低于 4.7.2 的 .NET Framework 程序集用 `net472`；没有业务程序集时为 `net8.0-windows`。显式指定但与业务程序集不兼容（类别不同或版本更低）时报错 |
+| `-Platform` | string | 自动 | `AnyCPU` / `x86` / `x64` / `ARM64`，写入 `PlatformTarget`。省略时读取 `-AssemblyPath` 的 PE 头：存在 x86 程序集（含 C++/CLI 混合程序集与“首选 32 位”的 exe）或 x64 / ARM64 程序集就跟随它，否则 `AnyCPU`；要求冲突时报错 |
 | `-WorkDir` | string | `%TEMP%\wpf-render-<GUID>` | 工程目录；**已存在则拒绝覆盖** |
-| `-AssemblyPath` | string[] | 空 | 要引用的业务 DLL，必须是 `.dll`；以 `HintPath` + `Private=true` 写入 csproj（路径做 XML 转义，可含空格） |
+| `-AssemblyPath` | string[] | 空 | 要引用的业务程序集（`.dll`，或 .NET Framework WPF 程序的 `.exe`）；以 `HintPath` + `Private=true` 写入 csproj（路径做 XML 转义，可含空格）。.NET Framework 与 .NET 程序集不能混用 |
 | `-ViewType` | string | 空 | 要渲染的 View 类型（完整名或程序集限定名），需有无参构造；与 `-Xaml` 二选一 |
 | `-Xaml` | string | 空 | 松散 XAML 文件（无 `x:Class` / 事件），可经 `clr-namespace;assembly=` 引用业务控件 |
 | `-DataContextType` | string | 空 | 用无参构造创建并设为 View 的 `DataContext` |
@@ -169,7 +172,15 @@ wpf-offscreen-render/
 
 视图参数写入 `harness.json`，渲染时才读取；之后修改它或 XAML 文件只需 `-NoBuild` 重新渲染。工程同时写入空的 `Directory.Build.props` / `.targets` 与关闭集中包管理的 `Directory.Packages.props`，放在业务仓库里也不会继承上层构建配置。
 
-生成的 csproj 关键属性：`OutputType=Exe`、`UseWPF=true`、`ImplicitUsings`、`Nullable`、`UseAppHost=false`（通过 `dotnet RenderHarness.dll` 启动）。
+生成的 csproj 关键属性：`OutputType=Exe`、`UseWPF=true`、`ImplicitUsings`、`Nullable`、`LangVersion=latest`、`PlatformTarget`。启动方式由 TFM 和位数决定：
+
+| 宿主 | 启动方式 |
+| --- | --- |
+| .NET Framework | 直接运行 `out\RenderHarness.exe`，位数由 `PlatformTarget` 决定 |
+| .NET，`AnyCPU` | `UseAppHost=false`，通过 `dotnet RenderHarness.dll` 启动 |
+| .NET，固定 `x86` / `x64` / `ARM64` | `UseAppHost=true`，运行对应架构的 `RenderHarness.exe`，需安装该架构的 WindowsDesktop Runtime |
+
+宿主源码只使用 .NET Framework 4.7.2 与 .NET 5+ 共有的 API（不依赖 `System.Text.Json` 等 NuGet 包），同一份 `Program.cs` / `ConfiguredView.cs` / `ViewFactory.cs` 适用于全部 TFM。定制 `ViewFactory.cs` 时同样只能用目标 TFM 存在的 API。.NET 5 / 6 / 7 已停止支持，构建时会出现 `NETSDK1138` 警告，不影响渲染。
 
 ### `scripts/invoke-wpf-render.ps1`
 
@@ -235,12 +246,14 @@ wpf-offscreen-render/
   "background": "#FF1E1E1E",
   "backgroundSource": "theme-fallback",
   "bindingTraceVerified": true,
-  "bindingWarningOrErrorCount": 0,
   "image": "snapshot.png",
   "sha256": "bafb482d…",
-  "runtime": "8.0.31",
+  "targetFramework": ".NETCoreApp,Version=v8.0",
+  "runtime": ".NET 8.0.31",
+  "processArchitecture": "X64",
   "machineName": "…",
   "note": "Visual snapshot; native windows, input, and performance require separate verification.",
+  "bindingWarningOrErrorCount": 0,
   "exitCode": 0
 }
 ```
@@ -257,6 +270,7 @@ wpf-offscreen-render/
 | `bindingWarningOrErrorCount` | 真实绑定问题条数（排除自检标记） |
 | `background` / `backgroundSource` | 实际衬底颜色与来源（`window` / `theme-fallback` / `explicit` / `transparent`）；衬底不代表业务背景 |
 | `sha256` | PNG 字节哈希，用于快速判断是否完全一致 |
+| `targetFramework` / `runtime` / `processArchitecture` | 宿主编译的 TFM、实际运行时（如 `.NET Framework 4.8.9221.0`）与进程架构，基线比较时应一致 |
 | `exitCode` | 最终退出码 |
 
 ---
@@ -286,10 +300,15 @@ BindingExpression path error: 'NoSuchProperty' property not found on 'object' ''
 ### 1. 生成工程并引用业务程序集
 
 ```powershell
+# .NET 程序：TFM 与位数按程序集自动推断（此例为 net8.0-windows）
 $harness = & .\scripts\new-wpf-harness.ps1 `
-    -TargetFramework net8.0-windows `
     -AssemblyPath 'C:\work\MyApp\bin\Debug\net8.0-windows\MyApp.dll', `
                   'C:\work\MyApp\bin\Debug\net8.0-windows\MyUi.dll'
+
+# .NET Framework 程序：同样自动推断（此例为 net48；x86 编译的程序集会得到 x86 宿主）
+$harness = & .\scripts\new-wpf-harness.ps1 `
+    -AssemblyPath 'C:\work\LegacyApp\bin\Debug\LegacyApp.exe', 'C:\work\LegacyApp\bin\Debug\LegacyUi.dll'
+$harness | Select-Object TargetFramework, Platform   # 确认推断结果
 ```
 
 - 路径仅为示例，先确认实际程序集名称、版本与输出位置。
@@ -422,7 +441,8 @@ $after  = Get-Content (Join-Path $outDir 'manifest.json') -Raw | ConvertFrom-Jso
 | 不能证明性能 | `RenderTargetBitmap` 成功不代表页面切换不卡；性能需单独计时，见 `references/verification.md` |
 | 不能证明交互 | 快照不覆盖输入、焦点、键盘导航 |
 | `-WindowHost` 需要桌面会话 | 无交互会话的服务或 CI 代理可能失败 |
-| .NET Framework 程序 | 生成器只支持 `net8.0-windows` 及以上；旧框架需另建兼容宿主 |
+| .NET Core 3.x 程序 | 只支持 .NET Framework 4.7.2+ 与 .NET 5+ 宿主；3.x 程序集需升级，或显式 `-TargetFramework net5.0-windows` 等后自行验证兼容性 |
+| 混用 .NET Framework 与 .NET 程序集 | 一个进程只能承载一种运行时，生成器会拒绝；分别生成宿主 |
 | WinUI / UWP | 本工具针对 WPF 的 `System.Windows.Media.Imaging.RenderTargetBitmap`，与 WinUI / UWP 同名 API 无关 |
 
 ---

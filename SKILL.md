@@ -7,7 +7,7 @@ description: 独立的 Windows WPF 离屏渲染与界面快照工作流。用于
 
 在独立临时进程中创建 WPF Visual，通过 `RenderTargetBitmap` 输出 PNG；使用真实控件、真实样式和确定的样例数据。此 skill 不依赖任何 Gallery 或生产程序的启动入口。
 
-随附工具支持 .NET 8 及以上 WPF。旧 .NET Framework 项目可参考渲染流程，但需另建兼容宿主，不能直接跨运行时引用业务程序集。
+随附工具支持 .NET Framework 4.7.2 / 4.8 / 4.8.1 与 .NET 5 – 10 的 WPF。生成器按 `-AssemblyPath` 的程序集自动推断宿主 TFM 与位数（x86 / x64），.NET Framework 与 .NET 程序集不能混在同一宿主。
 
 ## 选择模式
 
@@ -20,11 +20,11 @@ description: 独立的 Windows WPF 离屏渲染与界面快照工作流。用于
 ## 操作流程
 
 1. 确认 Windows、PowerShell 7、匹配目标项目的 .NET SDK / WindowsDesktop Runtime。检查控件构造和 Loaded 是否触发硬件、网络或写入；用样例 ViewModel / stub 服务隔离这些行为。此 skill 不授予启动生产程序、连接设备或 Git 操作的权限。
-2. 运行生成器，默认在 `%TEMP%` 建立唯一目录。`$skillRoot` 填此 SKILL.md 所在目录的绝对路径（不要依赖当前目录）。示例使用 `net8.0-windows`，接入时改成目标项目兼容的 TFM：
+2. 运行生成器，默认在 `%TEMP%` 建立唯一目录。`$skillRoot` 填此 SKILL.md 所在目录的绝对路径（不要依赖当前目录）。不引用业务程序集时默认 `net8.0-windows`；引用后自动推断，也可显式传 `-TargetFramework net472` / `net48` / `net481` / `netN.0-windows` 和 `-Platform`，与程序集不兼容时生成器直接报错：
 
    ```powershell
    $skillRoot = '<此 skill 目录的绝对路径>'
-   $harness = & "$skillRoot\scripts\new-wpf-harness.ps1" -TargetFramework net8.0-windows
+   $harness = & "$skillRoot\scripts\new-wpf-harness.ps1"
    & "$skillRoot\scripts\invoke-wpf-render.ps1" -HarnessDir $harness.WorkDir -Theme light
    if ($LASTEXITCODE -ne 0) { throw '渲染或绑定检查失败，请检查输出日志' }
    ```
