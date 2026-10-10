@@ -252,10 +252,10 @@ wpf-offscreen-render/
 
 | `kind` | 含义 | 不会报告的情况 |
 | --- | --- | --- |
-| `text-truncated` | 文本按当前字体放不下（不换行时比较宽度，换行时比较高度），含已显示省略号的情况 | — |
-| `clipped` | 元素被父容器的布局空间裁掉一部分（父容器尺寸小于内容） | `ScrollViewer` 视口、`ClipToBounds`、显式 `Clip` 造成的裁切 |
+| `text-truncated` | 文本按当前字体放不下分到的布局空间（不换行时比较宽度，换行时比较高度），含已显示省略号的情况 | — |
+| `clipped` | 非文本内容元素（`Image`、`Control`）分到的布局空间小于所需尺寸，或任意内容元素被祖先容器的布局空间裁掉一部分 | `ScrollViewer` 视口、`ClipToBounds`、显式 `Clip` 造成的裁切 |
 | `overlap` | 两段文本的墨迹区域互相覆盖（按文本对齐计算实际字形范围） | 同一单元格中左右 / 居中对齐、字形不相交的文本 |
-| `zero-size` | 有内容的元素宽或高为 0 | `Visibility` 不是 `Visible` 的元素及其子树 |
+| `zero-size` | 有内容的元素分到的布局空间宽或高为 0 | `Visibility` 不是 `Visible` 的元素及其子树；`Control` 不报告（滚动条按钮等常为 0） |
 | `out-of-viewport` | 元素可见部分超出 `-Width` × `-Height` 视口 | 滚动区域内被视口裁掉的部分 |
 
 布局问题是给代理和人的线索，不影响退出码；祖先已报告 `clipped` / `out-of-viewport` 时后代不再重复报告。

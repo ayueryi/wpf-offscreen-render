@@ -19,8 +19,8 @@ Get-Content -LiteralPath (Join-Path $outDir 'binding-errors.txt')
 
 `layout.json` 的 `issues` 由宿主在截图后遍历视觉树得出，只检查内容元素（有文本的 `TextBlock`、有图像的 `Image`、`Control`）：
 
-- `text-truncated`：用元素自身的字体与字号测量文本，宽度（不换行）或高度（换行）超过可用空间。已设置 `TextTrimming` 的会注明“已显示省略号”；这是否可接受由业务决定。
-- `clipped`：父容器的布局空间小于元素需要的尺寸，元素被裁掉一部分。`ScrollViewer` 视口、`ClipToBounds`、显式 `Clip` 属于有意裁切，不报告。
+- `text-truncated`：用元素自身的字体与字号测量文本，宽度（不换行）或高度（换行）超过分到的布局空间。已设置 `TextTrimming` 的会注明“已显示省略号”；这是否可接受由业务决定。
+- `clipped`：`Image` / `Control` 分到的布局空间小于所需尺寸，或任意内容元素被祖先容器的布局空间裁掉一部分。`ScrollViewer` 视口、`ClipToBounds`、显式 `Clip` 属于有意裁切，不报告。
 - `overlap`：两段文本的字形区域重叠超过较小者面积的 15%。常见原因是同一 `Grid` 单元格、负边距或 `Canvas` 定位冲突。
 - `zero-size`：有内容的元素宽或高为 0，通常是固定尺寸、`*` 行列分配为 0 或父容器被压缩。
 - `out-of-viewport`：可见部分超出渲染视口；可能是视口太小，也可能是页面真的溢出，换更大的 `-Width` / `-Height` 再渲染区分。

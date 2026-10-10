@@ -81,14 +81,25 @@ internal static class LayoutReport
                 }
                 catch (InvalidOperationException) { return; }
 
+                // 元素需要的尺寸大于分到的布局槽位时，WPF 保留完整 RenderSize，只在元素自身加布局裁切。
+                // slot 是元素实际可见的槽位（元素坐标）；祖先造成的裁切另由 ancestorOverflow 判断。
+                var ancestorOverflow = overflowClip;
+                var slot = new Rect(element.RenderSize);
                 var layoutClip = LayoutInformation.GetLayoutClip(element);
                 if (layoutClip is not null && !layoutClip.Bounds.IsEmpty)
                 {
                     var clipInRoot = toRoot.TransformBounds(layoutClip.Bounds);
                     clip = Rect.Intersect(clip, clipInRoot);
                     var intended = element.ClipToBounds || element.Clip is not null || element is ScrollContentPresenter;
-                    if (!intended) overflowClip = Rect.Intersect(overflowClip, clipInRoot);
+                    if (!intended)
+                    {
+                        overflowClip = Rect.Intersect(overflowClip, clipInRoot);
+                        slot = Rect.Intersect(slot, layoutClip.Bounds);
+                        if (slot.IsEmpty) slot = new Rect(0, 0, 0, 0);
+                    }
                 }
+                var selfClipped = slot.Width < element.RenderSize.Width - Tolerance || slot.Height < element.RenderSize.Height - Tolerance;
+                var slotBounds = toRoot.TransformBounds(slot);
 
                 var label = Label(element);
                 var text = (element as TextBlock)?.Text;
@@ -102,17 +113,21 @@ internal static class LayoutReport
 
                 if (isContent)
                 {
-                    var visible = Rect.Intersect(bounds, clip);
-                    if (element.ActualWidth < 0.5 || element.ActualHeight < 0.5)
+                    var visible = Rect.Intersect(slotBounds, clip);
+                    var hasSlot = slot.Width >= 0.5 && slot.Height >= 0.5;
+                    if (!hasSlot)
                     {
-                        if (element is not Control) Report("zero-size", label, $"尺寸为 {Size(element.ActualWidth, element.ActualHeight)}，内容不可见", bounds);
+                        if (element is not Control) Report("zero-size", label, $"布局槽位为 {Size(slot.Width, slot.Height)}，内容不可见", bounds);
                     }
                     else if (!visible.IsEmpty && !placementReported)
                     {
-                        var kept = Rect.Intersect(bounds, overflowClip);
-                        if (kept.IsEmpty || kept.Width < bounds.Width - Tolerance || kept.Height < bounds.Height - Tolerance)
+                        // TextBlock 自身槽位不足由 text-truncated 报告；其他内容元素自身或祖先裁切都报 clipped。
+                        var kept = Rect.Intersect(slotBounds, ancestorOverflow);
+                        var clippedByAncestor = kept.IsEmpty || kept.Width < slotBounds.Width - Tolerance || kept.Height < slotBounds.Height - Tolerance;
+                        if (clippedByAncestor || (selfClipped && element is not TextBlock))
                         {
-                            Report("clipped", label, $"被布局空间裁切：需要 {Size(bounds.Width, bounds.Height)}，可见 {(kept.IsEmpty ? "0×0" : Size(kept.Width, kept.Height))}", bounds);
+                            var shown = clippedByAncestor ? kept : slotBounds;
+                            Report("clipped", label, $"被布局空间裁切：需要 {Size(bounds.Width, bounds.Height)}，可见 {(shown.IsEmpty ? "0×0" : Size(shown.Width, shown.Height))}", bounds);
                             placementReported = true;
                         }
                         else if (visible.Left < -Tolerance || visible.Top < -Tolerance
@@ -123,9 +138,10 @@ internal static class LayoutReport
                         }
                     }
 
-                    if (element is TextBlock textBlock && textBlock.Text.Length > 0 && element.ActualWidth >= 0.5)
+                    if (element is TextBlock textBlock && textBlock.Text.Length > 0 && hasSlot)
                     {
-                        var ink = CheckText(textBlock, pixelsPerDip, label, Report);
+                        // 文本问题的矩形同其他问题一样使用相对根元素的坐标。
+                        var ink = CheckText(textBlock, slot.Size, pixelsPerDip, label, (kind, at, message, _) => Report(kind, at, message, slotBounds));
                         if (!visible.IsEmpty && inks.Count < MaxOverlapCandidates)
                         {
                             var inkInRoot = Rect.Intersect(toRoot.TransformBounds(ink), clip);
@@ -162,16 +178,16 @@ internal static class LayoutReport
     }
 
     // 检查文本是否放得下，返回文本墨迹在元素坐标中的矩形（用于重叠检查）。
-    private static Rect CheckText(TextBlock textBlock, double pixelsPerDip, string label, Action<string, string, string, Rect> report)
+    private static Rect CheckText(TextBlock textBlock, Size slot, double pixelsPerDip, string label, Action<string, string, string, Rect> report)
     {
         var padding = textBlock.Padding;
-        var available = Math.Max(0, textBlock.ActualWidth - padding.Left - padding.Right);
-        var availableHeight = Math.Max(0, textBlock.ActualHeight - padding.Top - padding.Bottom);
+        var available = Math.Max(0, slot.Width - padding.Left - padding.Right);
+        var availableHeight = Math.Max(0, slot.Height - padding.Top - padding.Bottom);
         var formatted = new FormattedText(textBlock.Text, CultureInfo.CurrentUICulture, textBlock.FlowDirection,
             new Typeface(textBlock.FontFamily, textBlock.FontStyle, textBlock.FontWeight, textBlock.FontStretch),
             textBlock.FontSize, Brushes.Black, pixelsPerDip);
         var trimming = textBlock.TextTrimming == TextTrimming.None ? "" : "（已显示省略号）";
-        var bounds = new Rect(textBlock.RenderSize);
+        var bounds = new Rect(slot);
         if (textBlock.TextWrapping == TextWrapping.NoWrap)
         {
             if (formatted.WidthIncludingTrailingWhitespace > available + Tolerance)

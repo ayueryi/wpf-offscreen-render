@@ -43,6 +43,9 @@ if (-not $Quick) {
     }
 }
 
+$layoutProblemKinds = @('text-truncated:TextBlock#TruncatedTitle', 'clipped:Button#ClippedButton', 'overlap:TextBlock#OverlapA',
+    'zero-size:TextBlock#ZeroSizeText', 'out-of-viewport:TextBlock#OffscreenNote')
+
 $cases = @(
     @{ Name = 'sample-light'; Quick = $true
         Expect = @{ exitCode = 0; status = 'ok'; sourceViewType = 'System.Windows.Controls.Border'; pixelSize = '1280x800'; mode = 'layout-only'; layoutIssueCount = 0 } }
@@ -62,9 +65,7 @@ $cases = @(
     @{ Name = 'net8-broken-binding'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.BrokenBindingView'; DataContextType = 'SampleViews.OrderPreviewVm' }
         Expect = @{ exitCode = 2; bindingIssuePattern = 'TextBlock.Text <- Path=CustomerNmae（数据源 OrderPreviewVm）' } }
     @{ Name = 'net8-layout-problems'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }
-        Expect = @{ exitCode = 0; layoutIssueCount = 5
-            layoutIssues = @('text-truncated:TextBlock#TruncatedTitle', 'clipped:Button#ClippedButton', 'overlap:TextBlock#OverlapA',
-                'zero-size:TextBlock#ZeroSizeText', 'out-of-viewport:TextBlock#OffscreenNote') } }
+        Expect = @{ exitCode = 0; layoutIssueCount = 5; layoutIssues = $layoutProblemKinds } }
     @{ Name = 'net8-scroll-no-false-positive'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.ScrollListView' }
         Expect = @{ exitCode = 0; layoutIssueCount = 0 } }
     @{ Name = 'render-cache'; OneStep = @{ ViewType = 'SampleViews.OrderView'; DataContextType = 'SampleViews.OrderPreviewVm' } }
@@ -78,7 +79,7 @@ $cases = @(
     @{ Name = 'net472-broken-binding'; Sample = 'net472'; Generate = @{ ViewType = 'SampleViews.BrokenBindingView'; DataContextType = 'SampleViews.OrderPreviewVm' }
         Expect = @{ exitCode = 2; bindingIssuePattern = 'CustomerNmae' } }
     @{ Name = 'net472-layout-problems'; Sample = 'net472'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }
-        Expect = @{ exitCode = 0; layoutIssueCount = 5 } }
+        Expect = @{ exitCode = 0; layoutIssueCount = 5; layoutIssues = $layoutProblemKinds } }
     # 生成器应拒绝的组合：不生成工程，只断言错误信息。
     @{ Name = 'reject-mixed-runtimes'; Samples = @('net472', 'net8'); ExpectGenerateError = '同时包含 .NET Framework 与 .NET' }
     @{ Name = 'reject-lower-tfm'; Sample = 'net8'; Generate = @{ TargetFramework = 'net6.0-windows' }; ExpectGenerateError = '不能引用面向' }
