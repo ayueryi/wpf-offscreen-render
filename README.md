@@ -32,6 +32,7 @@
 - [视觉基线比较](#视觉基线比较)
 - [已知限制](#已知限制)
 - [故障排查](#故障排查)
+- [测试](#测试)
 - [作为 Agent Skill 使用](#作为-agent-skill-使用)
 - [安全约定](#安全约定)
 
@@ -145,6 +146,10 @@ wpf-offscreen-render/
 ├── references/
 │   ├── integration.md            # 接入真实界面的详细说明
 │   └── verification.md           # 验收、基线比较、故障定位、性能边界
+├── tests/
+│   ├── run-tests.ps1             # 端到端回归测试，-Quick 可用作环境自检
+│   └── fixtures/                 # 样例程序集（net472 / net8.0-windows）与松散 XAML
+├── .github/workflows/ci.yml      # windows-latest 上运行 tests/run-tests.ps1
 └── docs/
     └── images/                   # README 截图
 ```
@@ -468,21 +473,56 @@ $after  = Get-Content (Join-Path $outDir 'manifest.json') -Raw | ConvertFrom-Jso
 
 ---
 
-## 作为 Agent Skill 使用
+## 测试
 
-仓库根目录即 Skill 目录（`SKILL.md` + `agents/` + `assets/` + `scripts/` + `references/`），可以直接放进工作区：
+`tests/run-tests.ps1` 会构建 `tests/fixtures` 中的样例程序集，逐个生成宿主并渲染，断言退出码、`summary.json` 与 `manifest.json`：
 
 ```powershell
-# 方式一：复制
-robocopy . C:\path\to\workspace\.agents\skills\wpf-offscreen-render /E /XD .git docs
-
-# 方式二：作为子模块 / 符号链接，保持与本仓库同步
-New-Item -ItemType Junction -Path C:\path\to\workspace\.agents\skills\wpf-offscreen-render -Target (Get-Location).Path
+.\tests\run-tests.ps1                    # 全部用例（每个用例都会新建并构建宿主，耗时较长）
+.\tests\run-tests.ps1 -Quick             # 内置样例 + 松散 XAML，用作环境自检
+.\tests\run-tests.ps1 -Filter 'net472*'  # 按名称筛选；-KeepArtifacts 保留产物
 ```
+
+| 覆盖范围 | 用例 |
+| --- | --- |
+| 渲染模式、主题、DPI、衬底 | `sample-light`、`sample-dark-dpi144`、`sample-window-host`、`sample-transparent` |
+| 免代码接入 | `xaml-ok`、`net8-view`、`net472-view` |
+| 绑定错误检出（退出码 2） | `xaml-binding-error`、`net8-broken-binding`、`net472-broken-binding` |
+| TFM / 位数推断 | `net472-view`（AnyCPU → 64 位）、`net472-x86-view`（x86）、`sample-net10` |
+| 生成器拒绝不兼容组合 | `reject-mixed-runtimes`、`reject-lower-tfm`、`reject-platform-conflict` |
+
+需要 .NET 8 与 .NET 10 SDK（`sample-net10` 用例）以及 .NET Framework 4.7.2+ 运行时。通过时删除产物目录，失败时保留并打印路径。
+
+---
+
+## 作为 Agent Skill 使用
+
+仓库根目录即 Skill 目录（`SKILL.md` + `agents/` + `assets/` + `scripts/` + `references/` + `tests/`）。不同代理从不同目录发现 Skill：
+
+| 代理 | 项目级（随仓库共享） | 用户级（本机所有项目） |
+| --- | --- | --- |
+| Claude Code | `<工作区>\.claude\skills\wpf-offscreen-render` | `%USERPROFILE%\.claude\skills\wpf-offscreen-render` |
+| Codex 等读取 `.agents` 的代理 | `<工作区>\.agents\skills\wpf-offscreen-render` | 以对应代理的文档为准 |
+
+```powershell
+$skills = 'C:\path\to\workspace\.claude\skills'   # 或 .agents\skills、$env:USERPROFILE\.claude\skills
+New-Item -ItemType Directory -Path $skills -Force | Out-Null
+
+# 方式一：复制
+robocopy . "$skills\wpf-offscreen-render" /E /XD .git .github docs
+
+# 方式二：目录联接，保持与本仓库同步
+New-Item -ItemType Junction -Path "$skills\wpf-offscreen-render" -Target (Get-Location).Path
+
+# 安装后自检
+& "$skills\wpf-offscreen-render\tests\run-tests.ps1" -Quick
+```
+
+`SKILL.md` 的 `description` 决定代理何时加载此 Skill；修改触发场景时改这一行。
 
 代理会在用户提到“WPF 离屏截图、RenderTargetBitmap、无焦点界面预览、修改 WPF 后验证视觉效果”时加载 `SKILL.md`，按其中流程生成临时工程、渲染、查看 PNG 并报告：真实页面 / 样例、模式、尺寸与 DPI、主题、绑定检查、视觉结论、未覆盖内容和产物绝对路径。
 
-修改 Skill 行为时同步更新 `SKILL.md`、`references/` 和本 README。
+修改 Skill 行为时同步更新 `SKILL.md`、`references/` 和本 README，并运行 `tests/run-tests.ps1`（CI 在 `windows-latest` 上对每次推送运行同一脚本）。
 
 ---
 

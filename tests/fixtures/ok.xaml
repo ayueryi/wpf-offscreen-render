@@ -1,0 +1,8 @@
+<!-- 松散 XAML 样例：无 x:Class、无事件，应渲染成功且无绑定问题。 -->
+<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Background="White" Padding="24">
+  <StackPanel>
+    <TextBlock Text="Loose XAML probe" FontSize="24" />
+    <Button Content="OK" Width="120" Margin="0,16,0,0" HorizontalAlignment="Left" />
+  </StackPanel>
+</Border>
