@@ -1,6 +1,8 @@
 # 设计：交互步骤与动画取帧（1.2.0）
 
-状态：草案，待确认 · 目标版本：1.2.0
+状态：已在 1.2.0 实现 · 用户文档见 [references/steps.md](../../references/steps.md)
+
+> **实现与 P0 结论**（Windows CI 验证）：§11 的决策均按建议采纳。`SeekAlignedToLastTick` 在默认模式（无 `PresentationSource`）与窗口模式下都能同步求出动画值，`animate` 两种模式都可用，两次渲染的帧像素一致；`ButtonAutomationPeer.Invoke`、VSM 状态切换、WPF 对话框截取与关闭、`MessageBox` 记录与关闭在窗口模式下验证通过。与草案的差异：动画帧并入步骤总览图（`steps-overview.png`），不单独生成时间轴图；`settle` 只覆盖元素及其样式上由事件触发器启动的 Storyboard。
 
 ## 1. 背景
 

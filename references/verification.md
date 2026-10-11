@@ -73,7 +73,7 @@ Get-Content -LiteralPath (Join-Path $outDir 'binding-errors.txt')
 | `HwndHost`、`WindowsFormsHost`、WebView、HALCON 等 native 视口为空白 | WPF / HWND airspace 限制，`RenderTargetBitmap` 不捕获 native 内容；使用组件自身的图像导出接口，或获授权后做实际窗口捕获。**不要把 native 空白判定为回归** |
 | 不含系统窗口边框和阴影 | 只截 `Window.Content`；业务自绘标题栏属于内容，会被截到 |
 | 不能证明性能 | `RenderTargetBitmap` 成功不代表页面切换不卡；性能需单独计时，见下方“性能验证边界” |
-| 不能证明交互 | 快照不覆盖输入、焦点、键盘导航 |
+| 交互只覆盖可确定性驱动的部分 | 用[交互步骤](steps.md)验证展开、输入、点击、VisualState、动画帧；默认主题的悬停 / 按下（只读的 `IsMouseOver` 触发器）、拖拽、手势与真实输入序列不覆盖 |
 | `-WindowHost` 需要桌面会话 | 无交互会话的服务或 CI 代理可能失败 |
 | .NET Core 3.x 程序 | 只支持 .NET Framework 4.7.2+ 与 .NET 5+ 宿主；3.x 程序集需升级，或显式 `-TargetFramework net5.0-windows` 等后自行验证兼容性 |
 | 混用 .NET Framework 与 .NET 程序集 | 一个进程只能承载一种运行时，生成器会拒绝；分别生成宿主 |

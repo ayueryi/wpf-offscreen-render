@@ -20,6 +20,9 @@
 | `-DataContextFactory` | string | 空 | 无参静态工厂方法 `Namespace.Type.Method`，返回值设为 `DataContext`；与 `-DataContextType` 二选一 |
 | `-ResourceDictionary` | string[] | 空 | 按顺序合并的资源字典：pack URI、绝对路径，或相对当前目录的路径（生成时解析为绝对路径）；`{theme}` 替换为 `-Theme` 的值 |
 | `-FactoryFile` | string | 空 | 用该文件替换工程中的 `ViewFactory.cs`。自定义工厂不调用 `ConfiguredView.TryCreate` 时，`-ViewType` / `-Xaml` / `-DataContext*` 不生效 |
+| `-Steps` | string | 空 | 交互步骤：JSON 数组字符串或 JSON 文件路径，写入 `harness.json`；写法见 [steps.md](steps.md)，有误时在生成前报错 |
+| `-ContinueOnError` | switch | 关 | 某步失败后继续执行其余步骤 |
+| `-Animations` | string | `live` | `settle`：每次步骤截图前把事件触发器启动的 Storyboard 跳到结束状态 |
 | `-InferOnly` | switch | 关 | 只推断并返回 `TargetFramework` / `Platform`，不生成工程 |
 
 相对路径（`-WorkDir`、`-AssemblyPath`、`-Xaml` 等）按 PowerShell 当前位置解析，UNC 路径可直接使用。视图参数写入 `harness.json`，渲染时才读取；之后修改它或 XAML 文件只需 `-NoBuild` 重新渲染。工程同时写入空的 `Directory.Build.props` / `.targets`、关闭集中包管理的 `Directory.Packages.props` 与空的 `global.json`，放在业务仓库里也不会继承上层构建配置。`dotnet` 按**当前目录**查找 `global.json`，`invoke-wpf-render.ps1` 因此在宿主目录内执行构建，业务仓库锁定的 SDK 版本不影响宿主。
@@ -44,6 +47,7 @@
 | `-Dpi` | `96` | 可传多个，如 `-Dpi 96, 144` |
 | `-Size` | 无 | 多个视口，如 `-Size 1280x800, 800x600`；指定后忽略 `-Width` / `-Height` |
 | `-FactoryFile` | 无 | 同生成器；内容变化时重新构建缓存宿主 |
+| `-Steps` / `-ContinueOnError` / `-Animations` | 无 / 关 / `live` | 同生成器；步骤不能与多个主题 / 尺寸 / DPI 同时使用 |
 | `-Preset` | 无 | `wpf-render.json` 中的视图名，见 [integration.md](integration.md#业务项目接入wpf-renderjson) |
 | `-Config` | 从当前目录向上查找 | `wpf-render.json` 的路径或其所在目录 |
 | `-Build` | 关 | 渲染前在配置目录执行预设的 `build` 命令，失败时抛出并附构建日志末尾 |
@@ -133,10 +137,11 @@
 | `element.png` | 使用 `-Element` 且渲染成功 | 指定元素的截图，尺寸为元素的 `RenderSize` × DPI / 96 |
 | `binding-errors.json` | 宿主正常结束 | 同上，逐条解析出 `targetElement` / `targetName` / `targetProperty` / `path` / `dataItem` / `reason` 与单行 `summary` |
 | `layout.json` | 渲染成功 | 视觉树中每个可见 `FrameworkElement` 的类型、名称、截图坐标中的矩形（DIP，已计入根元素自身的 Margin / 对齐偏移，与 `snapshot.png` 和 `elementRectDip` 一致）与文本（最多 3000 个），以及布局问题 `issues`。节点矩形是元素需要的完整尺寸，被父容器或自身槽位裁掉的部分也包含在内；实际可见范围以 `issues` 中的说明为准 |
+| `steps.json`、`steps/<序号>-<名称>/`、`steps-overview.png` | 使用交互步骤时 | 逐步结果、每步截图与 `layout.json`、动画帧、对话框截图，以及全部截图的总览图；`summary.json` 中对应 `steps` 与 `stepsOverview`，见 [steps.md](steps.md#结果) |
 | `build.log` | 未使用 `-NoBuild` | `dotnet build` 完整输出 |
 | `render.stdout.log` / `render.stderr.log` | 子进程启动后 | 宿主标准输出 / 错误 |
 | `error.txt` | 失败时 | 异常堆栈、自检失败、进程无法启动或超时说明。宿主崩溃而没有写出它时（如缺少 WindowsDesktop 运行时），`summary.json` 的 `error` 取 `render.stderr.log` 的末尾 |
-| `summary.json` | 总是 | 结论摘要：`status`（`ok` / `binding-issues` / `failed:build` / `failed:locate` / `failed:start` / `failed:render` / `failed:timeout`）、`snapshot`、`elementSnapshot` / `elementRectDip` / `elementError`（使用 `-Element` 时）、`warning`（如窗口模式下 RightToLeft 的业务 Window 截图未镜像）、`sourceViewType`、尺寸、衬底、前 5 条绑定问题（`bindingIssues`，解析后的单行结论）、布局问题条数与前 10 条（`layoutIssueCount` / `layoutIssues`）、编译错误、异常前 15 行；同时打印到控制台 |
+| `summary.json` | 总是 | 结论摘要：`status`（`ok` / `binding-issues` / `failed:build` / `failed:locate` / `failed:start` / `failed:render` / `failed:timeout` / `failed:step`）、`snapshot`、`elementSnapshot` / `elementRectDip` / `elementError`（使用 `-Element` 时）、`warning`（如窗口模式下 RightToLeft 的业务 Window 截图未镜像）、`sourceViewType`、尺寸、衬底、前 5 条绑定问题（`bindingIssues`，解析后的单行结论）、布局问题条数与前 10 条（`layoutIssueCount` / `layoutIssues`）、编译错误、异常前 15 行；同时打印到控制台 |
 
 `layout.json` 的布局问题（只检查有文本的 `TextBlock`、有图像的 `Image` 与 `Control`，容器本身不报告）：
 
@@ -206,7 +211,8 @@
 | --- | --- | --- |
 | `0` | 渲染成功、绑定监听自检命中、没有真实绑定问题 | 有 |
 | `1` | 构建失败 / 渲染异常 / 自检未命中 / 超时 | 通常没有；查看 `build.log`、`error.txt`、`render.stderr.log` |
-| `2` | 渲染成功，但存在真实绑定告警或错误 | 有，便于排查；详情在 `binding-errors.txt` |
+| `2` | 渲染成功，但存在真实绑定告警或错误（含交互步骤中出现的） | 有，便于排查；详情在 `binding-errors.txt` |
+| `3` | 交互步骤中有一步失败（状态 `failed:step`）；结果仍完整写出 | 有；失败原因在 `summary.json` 的 `error` 与 `steps` |
 
 例：把样例绑定改成不存在的属性后，执行器返回 `2`，`binding-errors.txt` 内容为：
 
