@@ -85,6 +85,16 @@ else
         var layout = Json(await Call("get_layout", new() { ["outDir"] = outDir, ["element"] = "ClippedButton", ["kind"] = "overlap" }));
         Check("get_layout 按元素与类型筛选", layout?["issueCount"]?.GetValue<int>() == 1 && (layout?["matchedNodes"] as JsonArray)?.Count > 0, layout?.ToJsonString() ?? "");
 
+        // 交互步骤：steps 参数按 JSON 数组传入，返回每步摘要与步骤总览图。
+        var stepsResult = await Call("render_view", new()
+        {
+            ["assemblyPaths"] = new[] { sample }, ["viewType"] = "SampleViews.InteractionView",
+            ["steps"] = JsonNode.Parse("""[{ "name": "expand", "set": { "element": "DetailsExpander", "property": "IsExpanded", "value": true } }]"""),
+        });
+        var stepsSummary = Json(stepsResult);
+        Check("render_view 交互步骤：每步摘要与总览图", stepsResult.IsError != true && (stepsSummary?["steps"] as JsonArray)?.Count == 1
+            && stepsSummary?["steps"]?[0]?["status"]?.GetValue<string>() == "ok" && Images(stepsResult) == 2, Texts(stepsResult));
+
         var broken = await Call("render_view", new()
         {
             ["assemblyPaths"] = new[] { sample }, ["viewType"] = "SampleViews.BrokenBindingView", ["dataContextType"] = "SampleViews.OrderPreviewVm",

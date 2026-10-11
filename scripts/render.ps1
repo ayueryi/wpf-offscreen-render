@@ -35,6 +35,10 @@ param(
     [string]$Background = 'auto',
     [switch]$WindowHost,
     [string]$Element,
+    # 交互步骤：JSON 数组字符串或文件路径；每步执行后截图并检查（见 docs/design/interaction-steps.md）。不能与多主题 / 尺寸 / DPI 同时使用。
+    [string]$Steps,
+    [switch]$ContinueOnError,
+    [ValidateSet('live', 'settle')][string]$Animations = 'live',
     [int]$TimeoutSeconds = 120,
     [string]$CacheRoot = (Join-Path ([IO.Path]::GetTempPath()) 'wpf-render-cache'),
     # 忽略缓存，生成一次性宿主（位于 %TEMP%\wpf-render-<GUID>）。
@@ -78,6 +82,7 @@ if ($Preset -or $Config -or $Build) {
         dataContextFactory = 'DataContextFactory', $false; factoryFile = 'FactoryFile', $true; resourceDictionaries = 'ResourceDictionary', $true
         targetFramework = 'TargetFramework', $false; platform = 'Platform', $false; themes = 'Theme', $false; sizes = 'Size', $false; dpis = 'Dpi', $false
         width = 'Width', $false; height = 'Height', $false; background = 'Background', $false; windowHost = 'WindowHost', $false; element = 'Element', $false
+        steps = 'Steps', $false; continueOnError = 'ContinueOnError', $false; animations = 'Animations', $false
     }
     # 显式参数覆盖预设：互斥的一组参数中显式传了任一个，预设里同组的键都不再生效
     # （否则预设的 viewType 与显式的 -Xaml 会冲突，预设的 sizes 会让显式的 -Width / -Height 被忽略）。
@@ -92,7 +97,9 @@ if ($Preset -or $Config -or $Build) {
         if (-not $settings.ContainsKey($key) -or $overridden.Contains($parameter)) { continue }
         $value = $settings[$key]
         if ($isPath) { $value = @($value | ForEach-Object { & $resolve $_ }); if ($parameter -in 'Xaml', 'FactoryFile') { $value = $value[0] } }
-        if ($parameter -eq 'WindowHost') { $value = [switch][bool]$value }
+        if ($parameter -in 'WindowHost', 'ContinueOnError') { $value = [switch][bool]$value }
+        # 预设中的步骤是 JSON 数组，转回字符串交给 -Steps。
+        if ($parameter -eq 'Steps') { $value = ConvertTo-Json -InputObject @($value) -Depth 12 -Compress }
         Set-Variable -Name $parameter -Value $value
     }
 
@@ -130,7 +137,7 @@ $ResourceDictionary = @($ResourceDictionary | ForEach-Object {
 $generator = Join-Path $PSScriptRoot 'new-wpf-harness.ps1'
 $renderer = Join-Path $PSScriptRoot 'invoke-wpf-render.ps1'
 $generate = @{ AssemblyPath = $assemblies; ViewType = $ViewType; Xaml = $Xaml; DataContextType = $DataContextType; DataContextFactory = $DataContextFactory
-    ResourceDictionary = $ResourceDictionary; FactoryFile = $FactoryFile }
+    ResourceDictionary = $ResourceDictionary; FactoryFile = $FactoryFile; Steps = $Steps; ContinueOnError = $ContinueOnError; Animations = $Animations }
 if ($TargetFramework) { $generate.TargetFramework = $TargetFramework }
 if ($Platform) { $generate.Platform = $Platform }
 $render = @{ Background = $Background; WindowHost = $WindowHost; TimeoutSeconds = $TimeoutSeconds }
@@ -141,6 +148,11 @@ $combos = @(foreach ($s in $sizes) { foreach ($t in $Theme) { foreach ($d in $Dp
                 [pscustomobject]@{ Theme = $t; Width = [int]$w; Height = [int]$h; Dpi = $d }
             } } })
 if ($combos.Count -eq 0) { throw '没有可渲染的组合：-Theme / -Dpi / -Size（或预设的 themes / dpis / sizes）不能为空。' }
+. (Join-Path $PSScriptRoot 'Steps.ps1')
+$normalizedSteps = @(ConvertTo-HarnessSteps $Steps)
+if ($normalizedSteps.Count -gt 0 -and $combos.Count -gt 1) {
+    throw "交互步骤不能与多个主题 / 尺寸 / DPI 同时使用（当前 $($combos.Count) 个组合）：请对每个组合分别渲染。"
+}
 
 # 渲染全部组合：单个组合时照常打印摘要；多个组合时只有第一个可能构建，其余 -NoBuild，最后汇总。
 function Invoke-Combos([string]$HarnessDir, [bool]$SkipBuild) {
@@ -247,8 +259,11 @@ try {
             dataContextFactory = if ($DataContextFactory) { $DataContextFactory } else { $null }
             resourceDictionaries = @($ResourceDictionary)
             assemblies = @($assemblies | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_) })
+            steps = $normalizedSteps
+            continueOnError = [bool]$ContinueOnError
+            animations = $Animations
         }
-        [IO.File]::WriteAllText((Join-Path $workDir 'harness.json'), ($harnessConfig | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $workDir 'harness.json'), ($harnessConfig | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         Copy-Item -LiteralPath $factorySource -Destination (Join-Path $workDir 'ViewFactory.cs') -Force
     }
     else {

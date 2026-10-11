@@ -19,6 +19,12 @@ param(
     [string[]]$ResourceDictionary = @(),
     # 用这个文件替换生成工程中的 ViewFactory.cs（业务仓库中受版本管理的预览工厂）。
     [string]$FactoryFile,
+    # 交互步骤：JSON 数组字符串或文件路径（见 docs/design/interaction-steps.md），写入 harness.json，改动无需重新构建。
+    [string]$Steps,
+    # 某步失败后继续执行其余步骤（默认停止）。
+    [switch]$ContinueOnError,
+    # live：保持动画原样；settle：每次截图前把事件触发器启动的 Storyboard 跳到结束状态。
+    [ValidateSet('live', 'settle')][string]$Animations = 'live',
     # 只推断并返回 TargetFramework / Platform，不生成工程（render.ps1 用来判断缓存宿主是否需要重新生成）。
     [switch]$InferOnly
 )
@@ -27,6 +33,8 @@ if (-not $IsWindows) { throw 'WPF 渲染需要 Windows。' }
 if ($ViewType -and $Xaml) { throw '-ViewType 与 -Xaml 只能二选一。' }
 if ($DataContextType -and $DataContextFactory) { throw '-DataContextType 与 -DataContextFactory 只能二选一。' }
 if (($DataContextType -or $DataContextFactory) -and -not ($ViewType -or $Xaml)) { throw '-DataContextType / -DataContextFactory 需要配合 -ViewType 或 -Xaml。' }
+. (Join-Path $PSScriptRoot 'Steps.ps1')
+$normalizedSteps = @(ConvertTo-HarnessSteps $Steps) # 先校验，写法有误时在生成工程前报错
 # ProviderPath：UNC 路径（\\server\share）的 .Path 带 PowerShell 提供程序前缀，.NET API 无法使用。
 if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).ProviderPath }
 if ($Xaml) { $Xaml = (Resolve-Path -LiteralPath $Xaml).ProviderPath }
@@ -188,9 +196,12 @@ $config = [ordered]@{
     dataContextFactory = if ($DataContextFactory) { $DataContextFactory } else { $null }
     resourceDictionaries = @($ResourceDictionary)
     assemblies = @($targets | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.Path) })
+    steps = $normalizedSteps
+    continueOnError = [bool]$ContinueOnError
+    animations = $Animations
 }
 $configPath = Join-Path $WorkDir 'harness.json'
-[IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 3), $utf8)
+[IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 8), $utf8)
 # 按字面路径复制：安装目录含 [ ] 时 -Path 会被当作通配符。
 Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '..\assets') -Filter '*.cs' | Copy-Item -Destination $WorkDir
 if ($FactoryFile) { Copy-Item -LiteralPath $FactoryFile -Destination (Join-Path $WorkDir 'ViewFactory.cs') -Force }

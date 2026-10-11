@@ -46,11 +46,45 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
     # 没有 error.txt 的崩溃（如缺少 WindowsDesktop 运行时，宿主在 Main 之前退出）：用 stderr 末尾说明原因。
     $errorLines = @(& $read 'error.txt' 15)
     $stderrLog = Join-Path $outDir 'render.stderr.log'
-    if ($errorLines.Count -eq 0 -and $ExitCode -notin 0, 2 -and (Test-Path -LiteralPath $stderrLog)) {
+    if ($errorLines.Count -eq 0 -and $ExitCode -notin 0, 2, 3 -and (Test-Path -LiteralPath $stderrLog)) {
         $errorLines = @(Get-Content -LiteralPath $stderrLog -Tail 15 | Where-Object { $_.Trim() })
     }
+    # 交互步骤：每步一行摘要，失败步骤的原因并入 error；所有截图（含动画帧）拼成总览图。
+    $stepsData = & $readJson 'steps.json'
+    $steps = $null
+    $stepsOverview = $null
+    if ($null -ne $stepsData) {
+        $stepsData = @($stepsData)
+        $steps = @($stepsData | ForEach-Object {
+                [ordered]@{
+                    index = $_.index; name = $_.name; action = $_.action; status = $_.status; error = $_.error
+                    snapshot = $_.snapshot; changedBoundsDip = $_.changedBoundsDip
+                    bindingIssues = @($_.bindingIssues | Select-Object -First 3); layoutIssueCount = $_.layoutIssueCount
+                    frames = @($_.frames | Where-Object { $_ } | ForEach-Object { [ordered]@{ atMs = $_.atMs; snapshot = $_.snapshot; changedBoundsDip = $_.changedBoundsDip } })
+                    dialogs = @($_.dialogs | Where-Object { $_ } | ForEach-Object { "$($_.kind)：$($_.title) $($_.text)".Trim() })
+                    warnings = @($_.warnings)
+                }
+            })
+        $failedSteps = @($stepsData | Where-Object status -eq 'failed')
+        if ($failedSteps) { $errorLines = @($failedSteps | ForEach-Object { "[步骤 $($_.index) $($_.name)] $($_.error)" }) + $errorLines }
+        $tiles = [Collections.Generic.List[object]]::new()
+        if (Test-Path -LiteralPath $snapshot) { $tiles.Add(@($snapshot, '0 · 初始')) }
+        foreach ($step in $stepsData) {
+            if ($step.frames) { foreach ($frame in $step.frames) { $tiles.Add(@($frame.snapshot, "$($step.index) · $($step.name) @$($frame.atMs)ms")) } }
+            elseif ($step.snapshot) { $tiles.Add(@($step.snapshot, "$($step.index) · $($step.name)$(if ($step.status -ne 'ok') { " · $($step.status)" })")) }
+        }
+        $tiles = @($tiles | Where-Object { Test-Path -LiteralPath $_[0] })
+        if ($tiles.Count -gt 1) {
+            try {
+                . (Join-Path $PSScriptRoot 'ImageTools.ps1')
+                $stepsOverview = Join-Path $outDir 'steps-overview.png'
+                [WpfOffscreenRender.ImageTools]::ContactSheet([string[]]@($tiles | ForEach-Object { $_[0] }), [string[]]@($tiles | ForEach-Object { $_[1] }), $stepsOverview, 360)
+            }
+            catch { $stepsOverview = $null; Write-Warning "步骤总览图生成失败：$($_.Exception.Message)" }
+        }
+    }
     $summary = [ordered]@{
-        status = switch ($ExitCode) { 0 { 'ok' } 2 { 'binding-issues' } default { "failed:$Stage" } }
+        status = switch ($ExitCode) { 0 { 'ok' } 2 { 'binding-issues' } 3 { 'failed:step' } default { "failed:$Stage" } }
         toolVersion = $manifest.toolVersion
         exitCode = $ExitCode
         outDir = $outDir
@@ -73,7 +107,8 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
         buildErrors = $buildErrors
         error = $errorLines
     }
-    $json = $summary | ConvertTo-Json -Depth 3
+    if ($null -ne $steps) { $summary.steps = $steps; $summary.stepsOverview = $stepsOverview }
+    $json = $summary | ConvertTo-Json -Depth 6
     [IO.File]::WriteAllText((Join-Path $outDir 'summary.json'), $json, [Text.UTF8Encoding]::new($false))
     Write-Host $json
     $global:LASTEXITCODE = $ExitCode
