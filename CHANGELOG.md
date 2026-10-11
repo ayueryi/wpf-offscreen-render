@@ -2,6 +2,20 @@
 
 版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
 
+## 1.2.0 – 2026-10-11
+
+### 新增：交互步骤与动画取帧
+- 在初始截图之后按顺序执行动作，每步截图并做绑定与布局检查：`set`（控件属性）、`setData`（ViewModel 数据）、`invoke`（经 UI 自动化点击按钮 / 切换 / 展开 / 选中）、`command`、`state`（VisualState，如 MouseOver）、`focus`、`animate`（Storyboard 按时刻取帧，结果可复现）、`custom`（业务 `ViewFactory.RunStepAsync`，可选实现，不影响现有工厂编译）。
+- 元素可按 `x:Name`、`AutomationId`、类型、显示文本与序号定位；`waitFor` 支持等待属性 / 数据达到指定值或 `ViewFactory.WaitUntilReadyAsync`。
+- 每步给出相对上一张截图的变化区域、新增的绑定错误（标明首次出现的步骤）与布局问题；全部截图拼成 `steps-overview.png`。
+- 动作打开的 WPF 对话框移到屏外、截图后关闭，业务代码随后继续执行；`MessageBox` 记录标题与文字后关闭。
+- 入口：MCP `render_view` 的 `steps` / `continueOnError` / `animations` / `includeStepImages`，`wpf-render.json` 预设的 `steps`，`render.ps1` / `new-wpf-harness.ps1` 的 `-Steps`。步骤不能与多主题 / 尺寸 / DPI 同时使用。
+- 新状态 `failed:step`（退出码 3）。文档：[references/steps.md](references/steps.md)，设计：[docs/design/interaction-steps.md](docs/design/interaction-steps.md)。
+- 限制：WPF 默认主题的悬停 / 按下由只读的 `IsMouseOver` / `IsPressed` 触发器实现，离屏无法模拟，`state` 步骤会明确报错；拖拽、手势与真实输入序列不在范围内。
+
+### 检查
+- 新增 `InteractionView` 样例与 5 组用例：窗口模式完整流程（net8 / net472）、默认模式取帧可复现、失败与 `continueOnError`、`custom` 步骤；预设 `steps` 与多主题冲突；MCP `render_view` 的 `steps`。
+
 ## 1.1.3 – 2026-10-10
 
 第四轮全量 review 的修复。

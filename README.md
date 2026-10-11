@@ -1,7 +1,7 @@
 # WPF Offscreen Render
 
 [![CI](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml/badge.svg)](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-1.1.3-blue)
+![version](https://img.shields.io/badge/version-1.2.0-blue)
 ![.NET](https://img.shields.io/badge/WPF-.NET%20Framework%204.7.2%20%E2%80%93%20.NET%2010-512BD4)
 
 让 AI 编码代理（Codex、Claude Code 等）**亲眼看到**自己改出来的 WPF 界面：在独立的临时进程里把真实的 `UserControl` / `Page` / `Window` 渲染成 PNG，并给出解析好的绑定错误和布局问题。
@@ -20,10 +20,11 @@
 - **结论可直接使用**：绑定错误解析成一行结论（如 `TextBlock.Text <- Path=CustomerNmae（数据源 OrderVm）`）；自动检查文本截断、被裁切、文本重叠、尺寸为 0、超出视口。
 - **为代理设计**：内置 MCP 服务器，作为 Claude Code / Codex 插件一条命令安装；代理调用一次即可拿到截图和 JSON 摘要。
 - **覆盖常见验证场景**：多主题 × 尺寸 × DPI 一次渲染并拼成总览图，修改前后像素对比，截取单个元素。
+- **交互步骤与动画取帧**：按顺序执行展开、输入、点击提交、切换 VisualState、执行命令等动作，每步截图并检查绑定与布局；动画按时刻（如 0 / 150 / 300 ms）取帧，结果可复现。
 - **兼容面广**：.NET Framework 4.7.2 / 4.8 / 4.8.1 与 .NET 5 – 10，按业务程序集自动选择宿主框架与位数（含 x86）。
 - **可以强制执行**：业务项目登记视图后，代理结束本轮回答前会自动渲染改动涉及的页面，有绑定错误时让代理继续修复。
 
-**适用范围**：只能在 **Windows** 上渲染（云端 Linux 容器中的代理会话用不了）。快照不包含 `Popup` / `ToolTip`、`HwndHost`、WebView 等原生内容，也不能证明性能与交互。不适用于 WinUI、UWP、Avalonia、MAUI。
+**适用范围**：只能在 **Windows** 上渲染（云端 Linux 容器中的代理会话用不了）。快照不包含 `Popup` / `ToolTip`、`HwndHost`、WebView 等原生内容，也不能证明性能；交互只覆盖能用代码确定性驱动的部分（见[交互步骤](references/steps.md#限制)，默认主题的鼠标悬停 / 按下样式截不到，拖拽、手势等真实输入不在范围内）。不适用于 WinUI、UWP、Avalonia、MAUI。
 
 ## 目录
 
@@ -153,7 +154,7 @@ Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh
 
 | MCP 工具 | 用途 |
 | --- | --- |
-| `render_view` | 渲染一个视图（或预设），返回 JSON 摘要和截图；传 `element` 时另附该元素的截图 |
+| `render_view` | 渲染一个视图（或预设），返回 JSON 摘要和截图；传 `element` 时另附该元素的截图；传 `steps` 时依次执行交互步骤，返回每步摘要和步骤总览图 |
 | `render_matrix` | 一次渲染多个主题 × 尺寸 × DPI，返回汇总和总览图 |
 | `compare_snapshots` | 对比两次渲染，返回变化区域和差异图（变化像素标红） |
 | `get_layout` | 按元素名、文本或问题类型查询某次渲染的布局树 |
@@ -290,6 +291,7 @@ flowchart LR
 | [SKILL.md](skills/wpf-offscreen-render/SKILL.md) | 代理工作流：何时用、怎么调用、如何读结果与报告 |
 | [references/cli.md](references/cli.md) | 全部脚本参数、渲染模式、输出文件与字段、退出码、尺寸与 DPI |
 | [references/integration.md](references/integration.md) | 接入业务界面：`wpf-render.json`、程序集与框架推断、DataContext 与 `ViewFactory.cs`、资源与主题、异步就绪 |
+| [references/steps.md](references/steps.md) | 交互步骤与动画取帧：动作类型、元素定位、等待、结果与限制 |
 | [references/verification.md](references/verification.md) | 产物验收、布局检查解读、视觉基线比较、故障定位、已知限制、性能验证边界 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本记录 |
 

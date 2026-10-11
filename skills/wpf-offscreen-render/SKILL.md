@@ -18,7 +18,7 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
 | 工具 | 用途 |
 | --- | --- |
 | `list_views` | 列出业务项目 `wpf-render.json` 中登记的视图预设 |
-| `render_view` | 渲染一个视图（或预设），返回 JSON 摘要与截图（`element` 另附元素截图） |
+| `render_view` | 渲染一个视图（或预设），返回 JSON 摘要与截图（`element` 另附元素截图；`steps` 执行交互步骤，另附步骤总览图） |
 | `render_matrix` | 一次渲染多个主题 × 尺寸 × DPI，返回汇总与总览图 |
 | `compare_snapshots` | 对比两次渲染的 `outDir`，返回变化区域与差异图 |
 | `get_layout` | 按元素名 / 文本或问题类型查询某次渲染的布局树，不必读取整个 `layout.json` |
@@ -45,13 +45,14 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
    - 需要同时看多个主题 / 尺寸 / DPI 时用 `render_matrix`，先看总览图再按需打开单张；只关心某个控件时传 `element`（`x:Name`）。
 3. DataContext 需要构造参数或 stub 服务时，用 `dataContextFactory`（无参静态工厂方法）；还需要配置资源、等待异步就绪、设置选中态或清理时，用 `factoryFile` 指向业务仓库中受版本管理的 `ViewFactory.cs`。只做一次性探查时也可以改用两步脚本：`scripts/new-wpf-harness.ps1` 生成工程，修改其中的 `ViewFactory.cs`，再用 `scripts/invoke-wpf-render.ps1 -HarnessDir` 渲染。异步页面在 `ViewFactory.WaitUntilReadyAsync` 等待明确完成信号；ContextIdle / 固定延时不能代替业务完成信号。详见 [接入真实界面](../../references/integration.md)。
 4. 先读 JSON 摘要再看图：
-   - `status`：`ok` / `binding-issues` / `failed:<阶段>`（`build` / `locate` / `start` / `render` / `timeout`）；多组合的汇总为 `ok` / `binding-issues` / `failed`，逐个组合看 `results`。
+   - `status`：`ok` / `binding-issues` / `failed:<阶段>`（`build` / `locate` / `start` / `render` / `timeout` / `step`）；多组合的汇总为 `ok` / `binding-issues` / `failed`，逐个组合看 `results`。
    - `bindingIssues`：每条一行，如 `TextBlock#Name.Text <- Path=CustomerNmae（数据源 OrderVm）：…`，直接定位到绑定。
    - `layoutIssues`：自动布局检查（`text-truncated` 文本放不下、`clipped` 被布局空间裁切、`overlap` 文本重叠、`zero-size`、`out-of-viewport`）。它们是线索不是结论，不影响状态；逐条对照截图确认，需要坐标时用 `get_layout` 按元素查询。
    - 失败时看 `buildErrors` 与 `error`，细节在 `outDir` 下的 `build.log`、`error.txt`、`render.stderr.log`。
    实际查看截图后再决定是否修正布局。详细验收与故障定位见 [验证和排障](../../references/verification.md)。
-5. 验证改动效果时，修改前先渲染一次作为基线，修改后用 `compare_snapshots`（`before` / `after` 为两次的 `outDir`）对比：看 `changedBoundsDip` 是否只落在预期区域、`environmentDifferences` 是否为空，并查看差异图（变化像素标红）。
-6. 报告真实页面 / 样例、模式、尺寸与 DPI、主题、绑定检查、布局检查、视觉结论及未覆盖内容，提供产物绝对路径。临时产物不写入仓库。若用户要求保存基线，另选稳定目录，保留旧基线再生成新快照。
+5. 改动涉及交互（展开、输入、点击提交、悬停、切换 Tab、动画）时，用 `steps` 让宿主按顺序执行动作并逐步截图：`set`（控件属性）、`setData`（ViewModel 数据）、`invoke`（点击按钮 / 切换 / 展开 / 选中）、`command`、`state`（VisualState，如 MouseOver）、`focus`、`animate`（动画按时刻取帧）、`custom`（业务 `ViewFactory.RunStepAsync`）。先看总览图，再按 `steps[].changedBoundsDip` 确认每步只改变了预期区域、`steps[].bindingIssues` 为空。异步结果用 `waitFor`（如 `data:Status=Submitted`）等待，不要只靠 `waitMs`。默认主题的悬停 / 按下由只读的 `IsMouseOver` 触发器实现，离屏截不到，`state` 会明确报错，不要把它当成样式没问题。动作会运行真实业务代码，只对样例 ViewModel / stub 服务执行。写法与限制见 [steps.md](../../references/steps.md)。
+6. 验证改动效果时，修改前先渲染一次作为基线，修改后用 `compare_snapshots`（`before` / `after` 为两次的 `outDir`）对比：看 `changedBoundsDip` 是否只落在预期区域、`environmentDifferences` 是否为空，并查看差异图（变化像素标红）。
+7. 报告真实页面 / 样例、模式、尺寸与 DPI、主题、绑定检查、布局检查、视觉结论及未覆盖内容，提供产物绝对路径。临时产物不写入仓库。若用户要求保存基线，另选稳定目录，保留旧基线再生成新快照。
 
 ## 输出与执行约定
 
