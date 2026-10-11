@@ -108,22 +108,12 @@ internal static class Program
                 var pixelWidth = (int)Math.Ceiling(width * dpi / 96.0);
                 var pixelHeight = (int)Math.Ceiling(height * dpi / 96.0);
                 var (background, backgroundSource) = ResolveBackground(Optional("--background") ?? "auto", theme, window, view is Window);
-                var bitmap = new RenderTargetBitmap(pixelWidth, pixelHeight, dpi, dpi, PixelFormats.Pbgra32);
-                if (background is not null)
-                {
-                    // RenderTargetBitmap 会叠加多次 Render，先铺底色避免透明 PNG 在查看器中显示为黑底。
-                    var fill = new DrawingVisual();
-                    using (var dc = fill.RenderOpen()) dc.DrawRectangle(background, null, new Rect(0, 0, width, height));
-                    bitmap.Render(fill);
-                }
-                bitmap.Render(root);
+                var bitmap = RenderRoot(root, width, height, dpi, background);
                 // RenderTargetBitmap 按根元素自身的变换与偏移（Margin、对齐、固定尺寸居中）绘制；
                 // 布局报告与元素坐标统一换算到截图坐标，才能与 snapshot.png、compare_snapshots 的区域直接对照。
                 var rootToImage = RootToImage(root);
                 var pngPath = Path.Combine(outDir, "snapshot.png");
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(bitmap));
-                using (var stream = File.Create(pngPath)) encoder.Save(stream);
+                SavePng(bitmap, pngPath);
 
                 // -Element：另存指定 x:Name 元素的截图。
                 double[]? elementRect = null;
@@ -157,6 +147,20 @@ internal static class Program
                 }
                 catch (Exception ex) { layoutReportError = ex.GetType().Name + ": " + ex.Message; }
 
+                // 交互步骤（harness.json 中的 steps）：在初始截图之后依次执行，每步截图并检查。
+                List<object?>? stepReports = null;
+                var stepsFailed = false;
+                if (StepsConfig.Load(ConfiguredView.ConfigPath) is { } stepsConfig)
+                {
+                    (stepReports, stepsFailed) = await StepRunner.RunAsync(new StepRunner.Context
+                    {
+                        Root = root, View = view, Window = window, Width = width, Height = height, Dpi = dpi, Background = background,
+                        OutDir = outDir, Initial = bitmap,
+                        BindingErrors = () => { listener.Flush(); return listener.Errors; },
+                    }, stepsConfig);
+                    File.WriteAllText(Path.Combine(outDir, "steps.json"), Json.Write(stepReports));
+                }
+
                 string sha256;
                 using (var sha = SHA256.Create())
                     sha256 = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(pngPath))).Replace("-", "").ToLowerInvariant();
@@ -179,6 +183,9 @@ internal static class Program
                     new("elementRectDip", elementRect),
                     new("elementImage", elementName is null || elementError is not null ? null : "element.png"),
                     new("elementError", elementError),
+                    new("stepCount", stepReports?.Count),
+                    new("stepsFailed", stepReports is null ? null : stepsFailed),
+                    new("steps", stepReports is null ? null : "steps.json"),
                     new("image", "snapshot.png"),
                     new("sha256", sha256),
                     new("targetFramework", typeof(Program).Assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName),
@@ -190,7 +197,8 @@ internal static class Program
                         ? "Window.FlowDirection 为 RightToLeft：截图与布局坐标未镜像（镜像在 Window 本身上）。可改为渲染其内容的 UserControl。" : null),
                     new("note", "Visual snapshot; native windows, input, and performance require separate verification.")
                 ];
-                exitCode = !listener.SelfCheckHit ? 1 : listener.Errors.Count > 0 ? 2 : 0;
+                // 3：有步骤失败（结果仍完整写出，不写 error.txt）；2：有绑定问题。
+                exitCode = !listener.SelfCheckHit ? 1 : stepsFailed ? 3 : listener.Errors.Count > 0 ? 2 : 0;
                 if (!listener.SelfCheckHit)
                     File.WriteAllText(Path.Combine(outDir, "error.txt"), "绑定监听自检未命中，不能宣称绑定检查通过。");
             }
@@ -238,8 +246,30 @@ internal static class Program
 
     private const long MaxPixels = 60000000;
 
+    // 按视口尺寸与 DPI 渲染根元素（先铺底色：RenderTargetBitmap 会叠加多次 Render，避免透明 PNG 在查看器中显示为黑底）。
+    internal static RenderTargetBitmap RenderRoot(Visual root, int width, int height, int dpi, Brush? background)
+    {
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(width * dpi / 96.0), (int)Math.Ceiling(height * dpi / 96.0), dpi, dpi, PixelFormats.Pbgra32);
+        if (background is not null)
+        {
+            var fill = new DrawingVisual();
+            using (var dc = fill.RenderOpen()) dc.DrawRectangle(background, null, new Rect(0, 0, width, height));
+            bitmap.Render(fill);
+        }
+        bitmap.Render(root);
+        return bitmap;
+    }
+
+    internal static void SavePng(BitmapSource bitmap, string path)
+    {
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
+    }
+
     // 根元素在截图中的变换：RenderTargetBitmap.Render 会应用根元素的 VisualTransform 与 VisualOffset。
-    private static GeneralTransform RootToImage(FrameworkElement root)
+    internal static GeneralTransform RootToImage(FrameworkElement root)
     {
         var group = new TransformGroup();
         if (VisualTreeHelper.GetTransform(root) is { } transform) group.Children.Add(transform);

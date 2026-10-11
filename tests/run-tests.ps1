@@ -81,6 +81,11 @@ $cases = @(
     @{ Name = 'factory-file'; Sample = 'net8'; Generate = @{ FactoryFile = Join-Path $fixtures 'CustomViewFactory.cs' }
         Expect = @{ exitCode = 0; status = 'ok'; sourceViewType = 'SampleViews.OrderView'; layoutText = 'Custom factory order' } }
     @{ Name = 'preset'; Kind = 'Preset' }
+    @{ Name = 'steps-net8'; Kind = 'Steps'; Sample = 'net8' }
+    @{ Name = 'steps-net472'; Kind = 'Steps'; Sample = 'net472' }
+    @{ Name = 'steps-layout-only'; Kind = 'StepsLayoutOnly' }
+    @{ Name = 'steps-failure'; Kind = 'StepsFailure' }
+    @{ Name = 'steps-custom'; Kind = 'StepsCustom' }
     @{ Name = 'stop-hook'; Kind = 'Hook' }
     @{ Name = 'net8-element'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'ClippedButton'; Dpi = 144 }
         Expect = @{ exitCode = 0; elementWidthDip = 300; elementPixelWidth = 450 } }
@@ -170,6 +175,127 @@ function Test-Matrix($case) {
     $failures
 }
 
+# 交互步骤：生成宿主并带 -Steps 渲染，返回摘要、退出码与 steps.json。
+function Invoke-Steps([string]$Name, [string]$Sample, $Steps, [hashtable]$Generate = @{}, [hashtable]$Render = @{}) {
+    $generateArgs = @{ WorkDir = Join-Path $ArtifactsDir "harness\$Name"; AssemblyPath = $samples[$Sample]; ViewType = 'SampleViews.InteractionView'
+        Steps = (ConvertTo-Json -InputObject @($Steps) -Depth 10 -Compress) } + $Generate
+    $harness = & $generator @generateArgs
+    $outDir = & $renderer -HarnessDir $harness.WorkDir @Render 6> $null
+    $exitCode = $LASTEXITCODE
+    $summary = Get-Content -LiteralPath (Join-Path "$outDir" 'summary.json') -Raw | ConvertFrom-Json
+    $stepsPath = Join-Path "$outDir" 'steps.json'
+    [pscustomobject]@{ OutDir = "$outDir"; ExitCode = $exitCode; Summary = $summary
+        Steps = if (Test-Path -LiteralPath $stepsPath) { @(Get-Content -LiteralPath $stepsPath -Raw | ConvertFrom-Json) } else { @() } }
+}
+
+# 某一步截图对应的 layout.json 中是否有该文本。
+function Test-StepText($Step, [string]$Text) {
+    if (-not $Step.snapshot) { return $false }
+    $layoutPath = Join-Path (Split-Path -Parent $Step.snapshot) 'layout.json'
+    if (-not (Test-Path -LiteralPath $layoutPath)) { return $false }
+    [bool](@((Get-Content -LiteralPath $layoutPath -Raw | ConvertFrom-Json).nodes) | Where-Object { "$($_.text)" -eq $Text })
+}
+
+# 完整流程（窗口模式）：展开、输入、提交（命令 + 提交后出现的错误绑定）、VSM 悬停、动画取帧、WPF 对话框、MessageBox、setData。
+function Test-Steps($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $steps = @(
+        @{ name = 'initial' }
+        @{ name = 'expand'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }
+        @{ name = 'type'; set = @{ element = 'CustomerBox'; property = 'Text'; value = 'Fabrikam' } }
+        @{ name = 'submit'; invoke = 'SubmitButton'; waitFor = 'data:Status=Submitted' }
+        @{ name = 'hover'; state = @{ element = 'VsmButton'; state = 'MouseOver' } }
+        @{ name = 'fade'; animate = @{ storyboard = 'FadeIn'; atMs = @(0, 150, 300) } }
+        @{ name = 'dialog'; invoke = @{ element = @{ text = 'Open dialog' } } }
+        @{ name = 'message'; invoke = 'MessageButton' }
+        @{ name = 'data'; setData = @{ path = 'Status'; value = 'Done' } }
+    )
+    $run = Invoke-Steps $case.Name $case.Sample $steps -Render @{ WindowHost = $true }
+    $byName = @{}
+    foreach ($step in $run.Steps) { $byName[$step.name] = $step }
+    if ($run.Summary.status -ne 'binding-issues' -or $run.ExitCode -ne 2) { $failures.Add("期望 binding-issues / 2（提交后的错误绑定），实际 $($run.Summary.status) / $($run.ExitCode)：$($run.Summary.error -join '; ')") }
+    $notOk = @($run.Steps | Where-Object status -ne 'ok')
+    if ($run.Steps.Count -ne 9 -or $notOk) { $failures.Add("期望 9 步全部 ok，实际 $($run.Steps.Count) 步；失败：$(@($notOk | ForEach-Object { "$($_.name): $($_.status) $($_.error)" }) -join '; ')") }
+    if ($run.Steps.Count -ne 9) { return $failures }
+    if (Test-StepText $byName.initial 'Order details: 3 items') { $failures.Add('初始画面不应显示折叠的明细') }
+    if (-not (Test-StepText $byName.expand 'Order details: 3 items')) { $failures.Add('展开后 layout.json 中应出现明细文本') }
+    if (-not $byName.expand.changedBoundsDip) { $failures.Add('展开后应有变化区域') }
+    if (-not (Test-StepText $byName.type 'Customer: Fabrikam')) { $failures.Add('输入后双向绑定应更新 CustomerEcho') }
+    if (-not (Test-StepText $byName.submit 'Submitted')) { $failures.Add('提交后 StatusText 应为 Submitted') }
+    $bindingSteps = @($run.Steps | Where-Object { $_.bindingIssueCount -gt 0 } | ForEach-Object name)
+    if ("$bindingSteps" -ne 'submit' -or "$($byName.submit.bindingIssues)" -notlike '*Mesage*') { $failures.Add("错误绑定应只归属到 submit 步：$bindingSteps / $($byName.submit.bindingIssues)") }
+    if (-not $byName.hover.changedBoundsDip) { $failures.Add('VSM 悬停后按钮背景应变化') }
+    $frames = @($byName.fade.frames)
+    if ($frames.Count -ne 3 -or -not $frames[1].changedBoundsDip -or -not $frames[2].changedBoundsDip) {
+        $failures.Add("淡入应得到 3 帧且第 2、3 帧各有变化：$($frames.Count) 帧，变化 $(@($frames | ForEach-Object { $_.changedPixels }) -join ',')")
+    }
+    $dialog = @($byName.dialog.dialogs)
+    if ($dialog.Count -ne 1 -or $dialog[0].kind -ne 'window' -or $dialog[0].title -ne 'Confirm' -or -not (Test-Path -LiteralPath "$($dialog[0].snapshot)")) { $failures.Add("应截取并关闭 Confirm 对话框：$($dialog | ConvertTo-Json -Compress)") }
+    if (-not (Test-StepText $byName.dialog 'Dialog closed')) { $failures.Add('对话框关闭后业务代码应继续执行（Status = Dialog closed）') }
+    $message = @($byName.message.dialogs)
+    if ($message.Count -ne 1 -or $message[0].kind -ne 'messageBox' -or $message[0].text -ne 'Saved successfully') { $failures.Add("应记录并关闭 MessageBox：$($message | ConvertTo-Json -Compress)") }
+    if (-not (Test-StepText $byName.data 'Done')) { $failures.Add('setData 后 StatusText 应为 Done') }
+    if (-not $run.Summary.stepsOverview -or -not (Test-Path -LiteralPath $run.Summary.stepsOverview)) { $failures.Add('缺少 steps-overview.png') }
+    if (@($byName.dialog.warnings) -notmatch '本地化') { $failures.Add('按文本定位应给出本地化提示') }
+    $failures
+}
+
+# 默认模式（无窗口）：属性设置与动画取帧不依赖窗口；同样的步骤两次渲染像素一致（取帧可复现）。
+function Test-StepsLayoutOnly($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $steps = @(
+        @{ name = 'expand'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }
+        @{ name = 'fade'; animate = @{ storyboard = 'FadeIn'; atMs = @(0, 150, 300) } }
+    )
+    $first = Invoke-Steps "$($case.Name)-1" 'net8' $steps
+    $second = Invoke-Steps "$($case.Name)-2" 'net8' $steps
+    if ($first.Summary.status -ne 'ok') { $failures.Add("期望 ok，实际 $($first.Summary.status)：$($first.Summary.error -join '; ')"); return $failures }
+    $frames = @($first.Steps[1].frames)
+    if ($frames.Count -ne 3 -or -not $frames[1].changedBoundsDip -or -not $frames[2].changedBoundsDip) {
+        $failures.Add("默认模式下动画取帧应逐帧变化：$(@($frames | ForEach-Object { $_.changedPixels }) -join ',')")
+    }
+    $hash = { param($run) @($run.Steps[1].frames | ForEach-Object { (Get-FileHash -LiteralPath $_.snapshot -Algorithm SHA256).Hash }) -join ',' }
+    if ((& $hash $first) -ne (& $hash $second)) { $failures.Add('两次渲染的动画帧应完全一致') }
+    $failures
+}
+
+# 失败语义：禁用按钮无法调用时停止并记录；continueOnError 时继续；默认主题按钮的悬停给出明确原因。
+function Test-StepsFailure($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $stop = Invoke-Steps "$($case.Name)-stop" 'net8' @(
+        @{ name = 'disabled'; invoke = 'DisabledButton' }
+        @{ name = 'after'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }
+    )
+    if ($stop.Summary.status -ne 'failed:step' -or $stop.ExitCode -ne 3) { $failures.Add("期望 failed:step / 3，实际 $($stop.Summary.status) / $($stop.ExitCode)") }
+    if ($stop.Steps[0].status -ne 'failed' -or $stop.Steps[0].error -notlike '*禁用*' -or -not (Test-Path -LiteralPath "$($stop.Steps[0].snapshot)")) { $failures.Add("第 1 步应失败（已禁用）并保留失败画面：$($stop.Steps[0] | ConvertTo-Json -Compress -Depth 4)") }
+    if ($stop.Steps[1].status -ne 'skipped') { $failures.Add("失败后应跳过后续步骤：$($stop.Steps[1].status)") }
+    if ("$($stop.Summary.error)" -notlike '*步骤 1*') { $failures.Add("摘要 error 应包含失败步骤：$($stop.Summary.error)") }
+
+    $continue = Invoke-Steps "$($case.Name)-continue" 'net8' @(
+        @{ name = 'theme-hover'; state = @{ element = 'SubmitButton'; state = 'MouseOver' } }
+        @{ name = 'missing'; set = @{ element = 'NoSuchElement'; property = 'IsEnabled'; value = $false } }
+        @{ name = 'after'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }
+    ) -Generate @{ ContinueOnError = $true }
+    if ($continue.Steps[0].error -notlike '*样式触发器*') { $failures.Add("默认主题按钮的悬停应说明无法模拟：$($continue.Steps[0].error)") }
+    if ($continue.Steps[1].error -notlike '*DetailsExpander*') { $failures.Add("找不到元素时应列出可用名称：$($continue.Steps[1].error)") }
+    if ($continue.Steps[2].status -ne 'ok') { $failures.Add("continueOnError 时应继续执行后续步骤：$($continue.Steps[2].status)") }
+
+    try { $null = & $generator -WorkDir (Join-Path $ArtifactsDir "harness\$($case.Name)-bad") -Steps '[{"set":{"element":"x"}}]'; $failures.Add('写法有误的步骤应在生成时报错') }
+    catch { if ($_.Exception.Message -notlike '*缺少 property*') { $failures.Add("步骤校验信息不明确：$($_.Exception.Message)") } }
+    $failures
+}
+
+# custom 步骤：自定义工厂实现 RunStepAsync 时可用；默认工厂未实现时只有用到 custom 才报错。
+function Test-StepsCustom($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $steps = @(@{ name = 'custom'; custom = @{ action = 'SetStatus'; args = @{ status = 'From factory' } } })
+    $with = Invoke-Steps "$($case.Name)-with" 'net8' $steps -Generate @{ FactoryFile = Join-Path $fixtures 'StepsViewFactory.cs' }
+    if ($with.Summary.status -ne 'ok' -or -not (Test-StepText $with.Steps[0] 'From factory')) { $failures.Add("custom 步骤应调用 RunStepAsync：$($with.Summary.status) $($with.Summary.error -join '; ')") }
+    $without = Invoke-Steps "$($case.Name)-without" 'net8' $steps
+    if ($without.Steps[0].error -notlike '*RunStepAsync*') { $failures.Add("未实现 RunStepAsync 时应明确报错：$($without.Steps[0].error)") }
+    $failures
+}
+
 # 业务仓库锁定了本机没有的 SDK（global.json）：在该仓库目录下运行时，宿主仍应使用本机 SDK 构建。
 function Test-GlobalJson($case) {
     $failures = [Collections.Generic.List[string]]::new()
@@ -235,6 +361,7 @@ function New-PresetProject([string]$Name) {
             # src/Broken/**/*.txt 也应匹配 src/Broken 下的直接子文件（** 可为零层目录）。
             Broken = [ordered]@{ viewType = 'SampleViews.BrokenBindingView'; dataContextType = 'SampleViews.OrderPreviewVm'; watch = @('src/Broken/**/*.txt') }
             Loose = [ordered]@{ xaml = Join-Path $fixtures 'ok.xaml' }
+            Interactive = [ordered]@{ viewType = 'SampleViews.InteractionView'; steps = @(@{ name = 'expand'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }) }
             Sized = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextType = 'SampleViews.OrderPreviewVm'; sizes = @('800x600', '1024x768') }
             Themes = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextType = 'SampleViews.OrderPreviewVm'; themes = @('light', 'dark') }
         }
@@ -272,6 +399,12 @@ function Test-Preset($case) {
         if ($looseSummary.sourceViewType -ne 'System.Windows.Controls.Border') { $failures.Add("视图的 xaml 应覆盖 defaults 的 viewType：$($looseSummary.sourceViewType)") }
     }
     catch { $failures.Add("显式 -Xaml / 视图 xaml 应覆盖 viewType：$($_.Exception.Message)") }
+    # 预设中的 steps；与多主题同时使用时报错。
+    $interactive = & $oneStep -Config $dir -Preset Interactive -CacheRoot $cache 6> $null
+    $interactiveSummary = Get-Content -LiteralPath (Join-Path "$interactive" 'summary.json') -Raw | ConvertFrom-Json
+    if ($interactiveSummary.status -ne 'ok' -or @($interactiveSummary.steps).Count -ne 1) { $failures.Add("预设 steps 应执行 1 步：$($interactiveSummary.status) / $(@($interactiveSummary.steps).Count)") }
+    try { $null = & $oneStep -Config $dir -Preset Interactive -Theme light, dark -CacheRoot $cache 6> $null; $failures.Add('steps 与多主题同时使用应报错') }
+    catch { if ($_.Exception.Message -notlike '*交互步骤不能*') { $failures.Add("steps 与多主题冲突的报错不明确：$($_.Exception.Message)") } }
     $themes = & $oneStep -Config $dir -Preset Themes -CacheRoot $cache 6> $null
     $matrix = Get-Content -LiteralPath (Join-Path "$themes" 'matrix.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
     if ($matrix.rendered -ne 2) { $failures.Add("Themes 预设应渲染 2 个组合：$($matrix.rendered)") }
