@@ -4,9 +4,9 @@
 ![version](https://img.shields.io/badge/version-1.1.1-blue)
 ![.NET](https://img.shields.io/badge/WPF-.NET%20Framework%204.7.2%20%E2%80%93%20.NET%2010-512BD4)
 
-让 AI 编码代理（Codex、Claude Code 等）**亲眼看到**自己改出来的 WPF 界面：在独立的临时进程里把真实的 `UserControl` / `Page` / `Window` 渲染成 PNG，并给出解析好的绑定错误和布局问题。
+让 AI 编码代理（Antigravity、Codex、Claude Code 等）**亲眼看到**自己改出来的 WPF 界面：在独立的临时进程里把真实的 `UserControl` / `Page` / `Window` 渲染成 PNG，并给出解析好的绑定错误和布局问题。
 
-*Render real WPF views offscreen to PNG, with parsed binding errors and layout checks — packaged as a Claude Code / Codex plugin with an MCP server.*
+*Render real WPF views offscreen to PNG, with parsed binding errors and layout checks — packaged as an Antigravity / Claude Code / Codex plugin with an MCP server.*
 
 | light | dark |
 | --- | --- |
@@ -18,7 +18,7 @@
 
 - **真实界面**：用业务程序集里的真实控件、样式和资源渲染，不是手绘 mock；不启动业务程序，不抢焦点，不弹窗口。
 - **结论可直接使用**：绑定错误解析成一行结论（如 `TextBlock.Text <- Path=CustomerNmae（数据源 OrderVm）`）；自动检查文本截断、被裁切、文本重叠、尺寸为 0、超出视口。
-- **为代理设计**：内置 MCP 服务器，作为 Claude Code / Codex 插件一条命令安装；代理调用一次即可拿到截图和 JSON 摘要。
+- **为代理设计**：内置 MCP 服务器，作为 Antigravity / Claude Code / Codex 插件一条命令安装；代理调用一次即可拿到截图和 JSON 摘要。
 - **覆盖常见验证场景**：多主题 × 尺寸 × DPI 一次渲染并拼成总览图，修改前后像素对比，截取单个元素。
 - **兼容面广**：.NET Framework 4.7.2 / 4.8 / 4.8.1 与 .NET 5 – 10，按业务程序集自动选择宿主框架与位数（含 x86）。
 - **可以强制执行**：业务项目登记视图后，代理结束本轮回答前会自动渲染改动涉及的页面，有绑定错误时让代理继续修复。
@@ -57,6 +57,42 @@ codex plugin marketplace add ayueryi/wpf-offscreen-render
 
 然后在 Codex 的插件列表中安装 `wpf-offscreen-render`。
 
+### Antigravity
+
+**一键安装（推荐）**：
+
+在仓库根目录下运行自动化安装脚本，自动检测环境并配置全局 MCP 服务器与 Skill：
+
+```powershell
+pwsh -File .\scripts\install-antigravity.ps1 -Test
+```
+
+- 若仅为当前工作区安装：`pwsh -File .\scripts\install-antigravity.ps1 -Scope Workspace`
+- 若需卸载：`pwsh -File .\scripts\install-antigravity.ps1 -Uninstall`
+
+**作为 Antigravity Plugin 安装**：
+
+本仓库根目录自带 Antigravity 标准的 `plugin.json` 与 `mcp_config.json`，可直接将仓库目录链接或放置于插件目录：
+- 全局插件目录：`~/.gemini/config/plugins/wpf-offscreen-render`
+- 工作区插件目录：`.agents/plugins/wpf-offscreen-render`
+
+**手动配置 MCP**：
+
+在 `~/.gemini/config/mcp_config.json` 中添加：
+
+```json
+{
+  "mcpServers": {
+    "wpf-offscreen-render": {
+      "command": "pwsh",
+      "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\tools\\wpf-offscreen-render\\mcp\\start.ps1"]
+    }
+  }
+}
+```
+
+并将 `skills/wpf-offscreen-render` 复制或联接（Junction）到 `~/.gemini/config/skills/wpf-offscreen-render` 或工作区的 `.agents/skills/wpf-offscreen-render`。
+
 ### 其他支持 MCP 的代理
 
 把仓库克隆到固定位置（下例为 `C:\tools\wpf-offscreen-render`），在代理的 MCP 配置中添加：
@@ -72,7 +108,7 @@ codex plugin marketplace add ayueryi/wpf-offscreen-render
 }
 ```
 
-Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\tools\wpf-offscreen-render\mcp\start.ps1`。需要工作流说明时，再把 `skills\wpf-offscreen-render` 复制到代理的 skills 目录（Claude Code：`.claude\skills\`；Codex：`.agents\skills\`）。
+Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\tools\wpf-offscreen-render\mcp\start.ps1`。需要工作流说明时，再把 `skills\wpf-offscreen-render` 复制到代理的 skills 目录（Claude Code：`.claude\skills\`；Codex / Antigravity：`.agents\skills\`）。
 
 ### 验证安装
 

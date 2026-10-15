@@ -6,7 +6,7 @@
 
 | 字段 | 位置 | 说明 |
 | --- | --- | --- |
-| `verifyOnStop` | 顶层 | `true` 时启用结束前自动验证（Claude Code 插件自带 Stop hook；Codex 见 [templates/codex-hooks.json](../templates/codex-hooks.json)） |
+| `verifyOnStop` | 顶层 | `true` 时启用结束前自动验证（Claude Code 插件自带 Stop hook；Codex 见 [templates/codex-hooks.json](../templates/codex-hooks.json)；Antigravity 见 [templates/antigravity-hooks.json](../templates/antigravity-hooks.json)） |
 | `blockOnLayoutIssues` | 顶层 | `true` 时布局问题也会阻止结束；默认只有渲染失败与绑定错误会阻止 |
 | `defaults` | 顶层 | 各视图共用的设置，视图中的同名字段覆盖它 |
 | `views.<名称>` | 顶层 | 一个视图预设 |
@@ -30,7 +30,7 @@
 
 **Stop hook 的行为**：代理结束本轮前，hook 从会话目录向上找到 `wpf-render.json`；`verifyOnStop` 为 `true` 且已授权时，用 `git status` 找出未提交的改动，渲染 `watch` 命中的视图（先执行一次 `build`）。有渲染失败或绑定错误时阻止结束，并把结论（视图、绑定路径、截图路径）交给代理继续修复；同一份改动只验证一次，代理确认无法修复时不会被反复拦截。没有 `wpf-render.json`、未启用或非 Windows 时立即退出。
 
-**代理规则**：把 [templates/agent-rules.md](../templates/agent-rules.md) 的内容加入业务仓库的 `AGENTS.md`（Codex 等）或 `CLAUDE.md`（Claude Code），约定修改界面后必须渲染验证并在回复中给出结论。
+**代理规则**：把 [templates/agent-rules.md](../templates/agent-rules.md) 的内容加入业务仓库的 `AGENTS.md`（Antigravity、Codex 等）或 `CLAUDE.md`（Claude Code），约定修改界面后必须渲染验证并在回复中给出结论。
 
 ## 工程和程序集
 

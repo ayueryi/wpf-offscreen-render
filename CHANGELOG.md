@@ -1,6 +1,19 @@
 # 更新日志
 
-版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
+版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
+
+## 1.1.2 – 2026-10-15
+
+支持 Google Antigravity 原生安装与插件集成。
+
+### 新增
+- 根目录新增 Antigravity 插件清单 `plugin.json` 与 MCP 配置文件 `mcp_config.json`，支持直接作为 Antigravity Plugin 加载。
+- 新增 `scripts/install-antigravity.ps1` 自动化管理脚本，支持全局（`~/.gemini/config/`）与工作区两种模式的 MCP 配置、Skill 软链接、卸载（`-Uninstall`）及快速自检（`-Test`）。
+- 新增 `templates/antigravity-hooks.json` 针对 Antigravity 生命周期的 Stop hook 模板。
+- 更新 `templates/agent-rules.md`、`references/integration.md` 与 `README.md`，提供 Antigravity 安装与接入文档。
+
+### 检查
+- `tests/validate-plugins.ps1` 扩展对 Antigravity 清单、MCP 配置和模板路径的完整性与跨清单一致性校验。
 
 ## 1.1.1 – 2026-10-10
 

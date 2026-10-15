@@ -1,4 +1,4 @@
-<!-- 复制到业务仓库的 AGENTS.md（Codex 等）或 CLAUDE.md（Claude Code）。按项目实际情况修改路径与视图名。 -->
+<!-- 复制到业务仓库的 AGENTS.md（Antigravity、Codex 等）或 CLAUDE.md（Claude Code）。按项目实际情况修改路径与视图名。 -->
 
 ## WPF 界面验证
 
