@@ -35,7 +35,8 @@ internal static class Program
             exitCode = 1;
             File.WriteAllText(Path.Combine(outDir, "error.txt"), e.Exception.ToString());
             e.Handled = true;
-            app.Shutdown(1);
+            // 只停止消息循环，不走 Application.Shutdown：它会关闭全部窗口，触发业务窗口 Closing 中的确认对话框。
+            app.Dispatcher.InvokeShutdown();
         };
         app.Dispatcher.InvokeAsync(async () =>
         {
@@ -68,6 +69,9 @@ internal static class Program
                 if (hosted)
                 {
                     window = view as Window ?? new Window { Content = view };
+                    // 最大化 / 最小化的窗口会忽略 Left / Top / Width / Height，出现在真实屏幕上或尺寸不受控。
+                    window.WindowState = WindowState.Normal;
+                    window.Topmost = false;
                     window.ShowActivated = false;
                     window.ShowInTaskbar = false;
                     window.WindowStartupLocation = WindowStartupLocation.Manual;
@@ -81,6 +85,13 @@ internal static class Program
                     window.Show();
                     root = window.Content as FrameworkElement
                         ?? throw new InvalidOperationException("Window.Content 必须是 FrameworkElement。");
+                    await IdleAsync();
+                    // 业务窗口常在 SourceInitialized / Loaded 中恢复上次的位置与最大化状态：显示后再强制一次。
+                    window.WindowState = WindowState.Normal;
+                    window.Left = -20000;
+                    window.Top = -20000;
+                    window.Width = width;
+                    window.Height = height;
                     await IdleAsync();
                 }
                 else
@@ -97,47 +108,32 @@ internal static class Program
                 var pixelWidth = (int)Math.Ceiling(width * dpi / 96.0);
                 var pixelHeight = (int)Math.Ceiling(height * dpi / 96.0);
                 var (background, backgroundSource) = ResolveBackground(Optional("--background") ?? "auto", theme, window, view is Window);
-                var bitmap = new RenderTargetBitmap(pixelWidth, pixelHeight, dpi, dpi, PixelFormats.Pbgra32);
-                if (background is not null)
-                {
-                    // RenderTargetBitmap 会叠加多次 Render，先铺底色避免透明 PNG 在查看器中显示为黑底。
-                    var fill = new DrawingVisual();
-                    using (var dc = fill.RenderOpen()) dc.DrawRectangle(background, null, new Rect(0, 0, width, height));
-                    bitmap.Render(fill);
-                }
-                bitmap.Render(root);
+                var bitmap = RenderRoot(root, width, height, dpi, background);
+                // RenderTargetBitmap 按根元素自身的变换与偏移（Margin、对齐、固定尺寸居中）绘制；
+                // 布局报告与元素坐标统一换算到截图坐标，才能与 snapshot.png、compare_snapshots 的区域直接对照。
+                var rootToImage = RootToImage(root);
                 var pngPath = Path.Combine(outDir, "snapshot.png");
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(bitmap));
-                using (var stream = File.Create(pngPath)) encoder.Save(stream);
+                SavePng(bitmap, pngPath);
 
-                // -Element：另存指定 x:Name 元素的截图。用 VisualBrush 绘制到原点，避免直接 Render 子元素时带上其在父容器中的偏移。
+                // -Element：另存指定 x:Name 元素的截图。
                 double[]? elementRect = null;
+                string? elementError = null;
                 if (elementName is not null)
                 {
                     var target = Descendants(root).FirstOrDefault(element => element.Name == elementName)
                         ?? throw new InvalidOperationException($"找不到 x:Name 为 {elementName} 的可见元素。可用名称：" +
                             string.Join(", ", Descendants(root).Select(element => element.Name).Where(name => name.Length > 0).Distinct().Take(40)));
                     var size = target.RenderSize;
-                    var bounds = ReferenceEquals(target, root) ? new Rect(size) : target.TransformToAncestor(root).TransformBounds(new Rect(size));
+                    var toRoot = ReferenceEquals(target, root) ? Transform.Identity : target.TransformToAncestor(root);
+                    var bounds = rootToImage.TransformBounds(toRoot.TransformBounds(new Rect(size)));
                     elementRect = [Math.Round(bounds.X, 1), Math.Round(bounds.Y, 1), Math.Round(bounds.Width, 1), Math.Round(bounds.Height, 1)];
-                    var elementBitmap = new RenderTargetBitmap(Math.Max(1, (int)Math.Ceiling(size.Width * dpi / 96.0)),
-                        Math.Max(1, (int)Math.Ceiling(size.Height * dpi / 96.0)), dpi, dpi, PixelFormats.Pbgra32);
-                    var drawing = new DrawingVisual();
-                    using (var dc = drawing.RenderOpen())
-                    {
-                        if (background is not null) dc.DrawRectangle(background, null, new Rect(size));
-                        dc.DrawRectangle(new VisualBrush(target)
-                        {
-                            Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top,
-                            ViewboxUnits = BrushMappingMode.Absolute, Viewbox = new Rect(size)
-                        }, null, new Rect(size));
-                    }
-                    elementBitmap.Render(drawing);
-                    var elementEncoder = new PngBitmapEncoder();
-                    elementEncoder.Frames.Add(BitmapFrame.Create(elementBitmap));
-                    using var elementStream = File.Create(Path.Combine(outDir, "element.png"));
-                    elementEncoder.Save(elementStream);
+                    var elementPixelWidth = Math.Max(1, (int)Math.Ceiling(size.Width * dpi / 96.0));
+                    var elementPixelHeight = Math.Max(1, (int)Math.Ceiling(size.Height * dpi / 96.0));
+                    // 未虚拟化的长列表等元素可能远大于视口：超过上限时不生成 element.png，整页截图与布局报告照常输出。
+                    if ((long)elementPixelWidth * elementPixelHeight > MaxPixels)
+                        elementError = $"元素 {elementName} 为 {elementPixelWidth}×{elementPixelHeight} 像素，超过 {MaxPixels / 1000000} 百万像素上限，未生成 element.png。";
+                    else
+                        WriteElementImage(target, size, background, elementPixelWidth, elementPixelHeight, dpi, Path.Combine(outDir, "element.png"));
                 }
                 listener.Flush();
                 // 布局检查只提供线索，不影响退出码；检查本身出错时记录原因，不让渲染失败。
@@ -145,11 +141,25 @@ internal static class Program
                 string? layoutReportError = null;
                 try
                 {
-                    var (layout, issueCount) = LayoutReport.Inspect(root, width, height, dpi / 96.0);
+                    var (layout, issueCount) = LayoutReport.Inspect(root, rootToImage, width, height, dpi / 96.0);
                     File.WriteAllText(Path.Combine(outDir, "layout.json"), Json.Write(layout));
                     layoutIssueCount = issueCount;
                 }
                 catch (Exception ex) { layoutReportError = ex.GetType().Name + ": " + ex.Message; }
+
+                // 交互步骤（harness.json 中的 steps）：在初始截图之后依次执行，每步截图并检查。
+                List<object?>? stepReports = null;
+                var stepsFailed = false;
+                if (StepsConfig.Load(ConfiguredView.ConfigPath) is { } stepsConfig)
+                {
+                    (stepReports, stepsFailed) = await StepRunner.RunAsync(new StepRunner.Context
+                    {
+                        Root = root, View = view, Window = window, Width = width, Height = height, Dpi = dpi, Background = background,
+                        OutDir = outDir, Initial = bitmap,
+                        BindingErrors = () => { listener.Flush(); return listener.Errors; },
+                    }, stepsConfig);
+                    File.WriteAllText(Path.Combine(outDir, "steps.json"), Json.Write(stepReports));
+                }
 
                 string sha256;
                 using (var sha = SHA256.Create())
@@ -171,16 +181,24 @@ internal static class Program
                     new("layoutReportError", layoutReportError),
                     new("element", elementName),
                     new("elementRectDip", elementRect),
-                    new("elementImage", elementName is null ? null : "element.png"),
+                    new("elementImage", elementName is null || elementError is not null ? null : "element.png"),
+                    new("elementError", elementError),
+                    new("stepCount", stepReports?.Count),
+                    new("stepsFailed", stepReports is null ? null : stepsFailed),
+                    new("steps", stepReports is null ? null : "steps.json"),
                     new("image", "snapshot.png"),
                     new("sha256", sha256),
                     new("targetFramework", typeof(Program).Assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName),
                     new("runtime", RuntimeInformation.FrameworkDescription),
                     new("processArchitecture", RuntimeInformation.ProcessArchitecture.ToString()),
                     new("machineName", Environment.MachineName),
+                    // 业务 Window 为 RightToLeft 时，镜像变换在 Window 上而截图只渲染其 Content，结果未镜像。
+                    new("warning", hosted && view is Window { FlowDirection: FlowDirection.RightToLeft }
+                        ? "Window.FlowDirection 为 RightToLeft：截图与布局坐标未镜像（镜像在 Window 本身上）。可改为渲染其内容的 UserControl。" : null),
                     new("note", "Visual snapshot; native windows, input, and performance require separate verification.")
                 ];
-                exitCode = !listener.SelfCheckHit ? 1 : listener.Errors.Count > 0 ? 2 : 0;
+                // 3：有步骤失败（结果仍完整写出，不写 error.txt）；2：有绑定问题。
+                exitCode = !listener.SelfCheckHit ? 1 : stepsFailed ? 3 : listener.Errors.Count > 0 ? 2 : 0;
                 if (!listener.SelfCheckHit)
                     File.WriteAllText(Path.Combine(outDir, "error.txt"), "绑定监听自检未命中，不能宣称绑定检查通过。");
             }
@@ -191,17 +209,8 @@ internal static class Program
             }
             finally
             {
-                try
-                {
-                    if (view != null) ViewFactory.Cleanup(view);
-                    window?.Close();
-                    listener.Flush();
-                }
-                catch (Exception ex)
-                {
-                    File.AppendAllText(Path.Combine(outDir, "error.txt"), ex.ToString());
-                    exitCode = 1;
-                }
+                // 先写出全部结果，再执行业务清理：清理可能卡住（例如窗口关闭确认框），结果不能因此丢失。
+                listener.Flush();
                 PresentationTraceSources.DataBindingSource.Listeners.Remove(listener);
                 File.WriteAllLines(Path.Combine(outDir, "binding-errors.txt"), listener.Errors);
                 File.WriteAllText(Path.Combine(outDir, "binding-errors.json"), Json.Write(listener.Errors.Select(BindingIssues.Describe).ToList()));
@@ -213,11 +222,81 @@ internal static class Program
                     File.WriteAllText(Path.Combine(outDir, "manifest.json"), Json.Write(manifest));
                 }
                 Console.WriteLine($"{outDir} (exit={exitCode})");
-                app.Shutdown(exitCode);
+                try
+                {
+                    if (view != null) ViewFactory.Cleanup(view);
+                }
+                catch (Exception ex)
+                {
+                    File.AppendAllText(Path.Combine(outDir, "error.txt"), ex.ToString());
+                    exitCode = 1;
+                }
+                // 不关闭窗口、不调用 Application.Shutdown（会关闭全部窗口并触发 Closing 中的确认对话框）：
+                // 只停止消息循环，随后由 Environment.Exit 结束进程。
+                app.Dispatcher.InvokeShutdown();
             }
         });
         app.Run();
+        // 业务代码可能留下前台线程（轮询、设备监听），进程会因此无法退出而被判为超时；结果已写完，直接结束进程。
+        Console.Out.Flush();
+        Console.Error.Flush();
+        Environment.Exit(exitCode);
         return exitCode;
+    }
+
+    private const long MaxPixels = 60000000;
+
+    // 按视口尺寸与 DPI 渲染根元素（先铺底色：RenderTargetBitmap 会叠加多次 Render，避免透明 PNG 在查看器中显示为黑底）。
+    internal static RenderTargetBitmap RenderRoot(Visual root, int width, int height, int dpi, Brush? background)
+    {
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(width * dpi / 96.0), (int)Math.Ceiling(height * dpi / 96.0), dpi, dpi, PixelFormats.Pbgra32);
+        if (background is not null)
+        {
+            var fill = new DrawingVisual();
+            using (var dc = fill.RenderOpen()) dc.DrawRectangle(background, null, new Rect(0, 0, width, height));
+            bitmap.Render(fill);
+        }
+        bitmap.Render(root);
+        return bitmap;
+    }
+
+    internal static void SavePng(BitmapSource bitmap, string path)
+    {
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
+    }
+
+    // 根元素在截图中的变换：RenderTargetBitmap.Render 会应用根元素的 VisualTransform 与 VisualOffset。
+    internal static GeneralTransform RootToImage(FrameworkElement root)
+    {
+        var group = new TransformGroup();
+        if (VisualTreeHelper.GetTransform(root) is { } transform) group.Children.Add(transform);
+        var offset = VisualTreeHelper.GetOffset(root);
+        group.Children.Add(new TranslateTransform(offset.X, offset.Y));
+        return group;
+    }
+
+    // 用 VisualBrush 把元素绘制到原点，避免直接 Render 子元素时带上其在父容器中的偏移。
+    private static void WriteElementImage(FrameworkElement target, Size size, Brush? background, int pixelWidth, int pixelHeight, int dpi, string path)
+    {
+        var bitmap = new RenderTargetBitmap(pixelWidth, pixelHeight, dpi, dpi, PixelFormats.Pbgra32);
+        var drawing = new DrawingVisual();
+        using (var dc = drawing.RenderOpen())
+        {
+            if (background is not null) dc.DrawRectangle(background, null, new Rect(size));
+            dc.DrawRectangle(new VisualBrush(target)
+            {
+                Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top,
+                ViewboxUnits = BrushMappingMode.Absolute, Viewbox = new Rect(size)
+            }, null, new Rect(size));
+        }
+        bitmap.Render(drawing);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
     }
 
     // auto：业务窗口或被样式 / 本地值设置过 Background 的承载窗口取其背景，否则按主题标签取中性底色；

@@ -15,10 +15,11 @@
 | `resourceDictionaries` | 预设 | pack URI 原样使用，其余相对路径相对于配置目录；`{theme}` 替换为主题 |
 | `themes`、`sizes`、`dpis` | 预设 | 多个值时得到多组合汇总（`matrix.json` 与总览图） |
 | `width`、`height`、`background`、`windowHost`、`element`、`targetFramework`、`platform` | 预设 | 同 `render.ps1` 参数 |
+| `steps`、`continueOnError`、`animations` | 预设 | 交互步骤：初始截图后依次执行动作并逐步截图，写法见 [steps.md](steps.md)；不能与多个主题 / 尺寸 / DPI 同时使用。Stop hook 渲染该视图时步骤失败同样阻止结束 |
 | `build` | 预设 | 参数数组（不经过 shell），如 `["dotnet", "build", "src/MyApp/MyApp.csproj", "-c", "Debug"]`；`-Build` / `build: true` 时在配置目录执行 |
-| `watch` | 预设 | 文件模式（`**` 任意层级、`*` 单级），相对于配置目录；Stop hook 只验证改动命中 `watch` 的视图 |
+| `watch` | 预设 | 文件模式（`**` 任意层级，含零层：`src/**/*.xaml` 也匹配 `src/A.xaml`；`*` 单级内任意字符；`?` 单个字符），相对于配置目录；Stop hook 只验证改动命中 `watch` 的视图（重命名时新旧路径都算） |
 
-显式传入的参数覆盖预设值，例如 `render.ps1 -Config . -Preset OrderList -Width 900`。
+显式传入的参数覆盖预设值，例如 `render.ps1 -Config . -Preset OrderList -Width 900`。互斥的参数按组覆盖：显式 `-Xaml` 会同时取消预设的 `viewType`，显式 `-Width` / `-Height` 会取消预设的 `sizes`（详见 [cli.md](cli.md#scriptsrenderps1)）。
 
 **DataContext 的三种来源**，按需要选择最轻的一种：
 

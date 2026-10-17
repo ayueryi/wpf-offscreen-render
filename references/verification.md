@@ -55,13 +55,13 @@ Get-Content -LiteralPath (Join-Path $outDir 'binding-errors.txt')
 | 原生视口或菜单缺失 | 见下方[已知限制](#已知限制) |
 | 多次输出不稳定 | 主题静态状态、动画、当前时间、随机数据、字体、异步未就绪 |
 | 构建输出被锁定 | 使用独立 harness / 临时输出；不要擅自结束正在运行的业务程序 |
-| MCP 服务器连接失败 | `pwsh` 与 `dotnet` 是否在 PATH 中；首次编译是否能访问 NuGet（见上文离线说明）；编译输出在代理的 MCP 日志（stderr）中 |
+| MCP 服务器连接失败 | `pwsh` 与 `dotnet` 是否在 PATH 中；首次编译是否能访问 NuGet（见上文离线说明）；编译输出在代理的 MCP 日志（stderr）中；首次编译超过客户端启动超时时，先运行 `mcp/start.ps1 -BuildOnly` 预热再重启会话 |
 | 结束前自动验证没有触发 | 是否 `verifyOnStop: true`、是否已用 `trust-project.ps1` 授权且授权后未修改配置（`-List` 查看）、改动的文件是否命中 `watch`、改动是否已提交（hook 只看未提交的改动） |
 | 超时（`error.txt` 提示超过 N 秒） | 就绪信号永不完成、UI 线程被同步阻塞；必要时调大 `-TimeoutSeconds` 定位 |
 
 ## 离线与内网环境
 
-- **MCP 服务器**：首次启动时 `mcp/start.ps1` 需要从 NuGet 还原 `ModelContextProtocol`。离线机器上可以先在联网的同版本环境中启动一次（或运行 `tests/run-tests.ps1 -Filter mcp-server`），再把 `%LOCALAPPDATA%\wpf-offscreen-render\mcp\<哈希>` 整个目录复制到离线机器的相同位置；哈希由服务器源码决定，插件版本相同即可复用。也可以通过 `WPF_RENDER_MCP_CACHE` 指定缓存目录。
+- **MCP 服务器**：首次启动时 `mcp/start.ps1` 需要从 NuGet 还原 `ModelContextProtocol`。离线机器上可以先在联网的同版本环境中运行一次 `mcp/start.ps1 -BuildOnly`，再把 `%LOCALAPPDATA%\wpf-offscreen-render\mcp\<哈希>` 整个目录复制到离线机器的相同位置；哈希由服务器源码决定，插件版本相同即可复用。也可以通过 `WPF_RENDER_MCP_CACHE` 指定缓存目录。
 - **.NET Framework 宿主**：需要安装对应版本的 .NET Framework Developer Pack；未安装时 SDK 会尝试从 NuGet 还原引用程序集。
 - **业务程序集的 NuGet 依赖**：指向应用（exe）的输出目录时依赖已在目录中，不需要联网。
 
@@ -73,7 +73,7 @@ Get-Content -LiteralPath (Join-Path $outDir 'binding-errors.txt')
 | `HwndHost`、`WindowsFormsHost`、WebView、HALCON 等 native 视口为空白 | WPF / HWND airspace 限制，`RenderTargetBitmap` 不捕获 native 内容；使用组件自身的图像导出接口，或获授权后做实际窗口捕获。**不要把 native 空白判定为回归** |
 | 不含系统窗口边框和阴影 | 只截 `Window.Content`；业务自绘标题栏属于内容，会被截到 |
 | 不能证明性能 | `RenderTargetBitmap` 成功不代表页面切换不卡；性能需单独计时，见下方“性能验证边界” |
-| 不能证明交互 | 快照不覆盖输入、焦点、键盘导航 |
+| 交互只覆盖可确定性驱动的部分 | 用[交互步骤](steps.md)验证展开、输入、点击、VisualState、动画帧；默认主题的悬停 / 按下（只读的 `IsMouseOver` 触发器）、拖拽、手势与真实输入序列不覆盖 |
 | `-WindowHost` 需要桌面会话 | 无交互会话的服务或 CI 代理可能失败 |
 | .NET Core 3.x 程序 | 只支持 .NET Framework 4.7.2+ 与 .NET 5+ 宿主；3.x 程序集需升级，或显式 `-TargetFramework net5.0-windows` 等后自行验证兼容性 |
 | 混用 .NET Framework 与 .NET 程序集 | 一个进程只能承载一种运行时，生成器会拒绝；分别生成宿主 |

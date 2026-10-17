@@ -21,7 +21,7 @@ $comparer = Join-Path $root 'scripts\compare-snapshots.ps1'
 $fixtures = Join-Path $PSScriptRoot 'fixtures'
 $userArtifacts = [bool]$ArtifactsDir
 if (-not $ArtifactsDir) { $ArtifactsDir = Join-Path ([IO.Path]::GetTempPath()) ('wpf-render-tests-' + [guid]::NewGuid().ToString('N')) }
-$ArtifactsDir = [IO.Path]::GetFullPath($ArtifactsDir)
+$ArtifactsDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ArtifactsDir)
 # 生成器拒绝覆盖已有工程目录，复用非空目录会让用例误报失败。
 if ((Test-Path -LiteralPath $ArtifactsDir) -and (Get-ChildItem -LiteralPath $ArtifactsDir -Force | Select-Object -First 1)) {
     throw "产物目录非空：$ArtifactsDir"
@@ -74,15 +74,23 @@ $cases = @(
     @{ Name = 'render-matrix'; Kind = 'Matrix' }
     @{ Name = 'cache-cleanup'; Kind = 'CacheCleanup' }
     @{ Name = 'compare-snapshots'; Kind = 'Compare' }
+    @{ Name = 'global-json-isolation'; Kind = 'GlobalJson' }
     @{ Name = 'mcp-server'; Kind = 'Mcp' }
     @{ Name = 'factory-method'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.OrderView'; DataContextFactory = 'SampleViews.PreviewData.CreateRemoteOrder' }
         Expect = @{ exitCode = 0; status = 'ok'; layoutText = 'Order #2048' } }
     @{ Name = 'factory-file'; Sample = 'net8'; Generate = @{ FactoryFile = Join-Path $fixtures 'CustomViewFactory.cs' }
         Expect = @{ exitCode = 0; status = 'ok'; sourceViewType = 'SampleViews.OrderView'; layoutText = 'Custom factory order' } }
     @{ Name = 'preset'; Kind = 'Preset' }
+    @{ Name = 'steps-net8'; Kind = 'Steps'; Sample = 'net8' }
+    @{ Name = 'steps-net472'; Kind = 'Steps'; Sample = 'net472' }
+    @{ Name = 'steps-layout-only'; Kind = 'StepsLayoutOnly' }
+    @{ Name = 'steps-failure'; Kind = 'StepsFailure' }
+    @{ Name = 'steps-custom'; Kind = 'StepsCustom' }
     @{ Name = 'stop-hook'; Kind = 'Hook' }
     @{ Name = 'net8-element'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'ClippedButton'; Dpi = 144 }
         Expect = @{ exitCode = 0; elementWidthDip = 300; elementPixelWidth = 450 } }
+    @{ Name = 'net8-element-offset'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.CenteredView' }; Render = @{ Element = 'CenteredButton' }
+        Expect = @{ exitCode = 0; elementRectDip = '450,310,100,30' } }
     @{ Name = 'net8-element-missing'; Sample = 'net8'; Generate = @{ ViewType = 'SampleViews.LayoutProblemsView' }; Render = @{ Element = 'NoSuchElement' }
         Expect = @{ exitCode = 1; errorPattern = 'ClippedButton' } }
     @{ Name = 'net472-view'; Sample = 'net472'; Generate = @{ ViewType = 'SampleViews.OrderView'; DataContextType = 'SampleViews.OrderPreviewVm' }
@@ -112,8 +120,17 @@ function Get-PngWidth([string]$Path) {
 function Test-CacheCleanup($case) {
     $failures = [Collections.Generic.List[string]]::new()
     $cacheRoot = Join-Path $ArtifactsDir "$($case.Name)-cache"
-    $busy = 'test' + [guid]::NewGuid().ToString('N').Substring(0, 12)
-    $idle = 'test' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+    # 缓存目录名为 16 位十六进制；无关目录（名称不符或没有 cache.json）即使很旧也不能删除。
+    $busy = [guid]::NewGuid().ToString('N').Substring(0, 16)
+    $idle = [guid]::NewGuid().ToString('N').Substring(0, 16)
+    $foreign = Join-Path $cacheRoot 'unrelated-data'
+    # 名称恰好是 16 位十六进制、但没有 cache.json / RenderHarness.csproj 的目录同样不属于本工具。
+    $hexForeign = Join-Path $cacheRoot ([guid]::NewGuid().ToString('N').Substring(0, 16))
+    foreach ($dir in $foreign, $hexForeign) {
+        $null = New-Item -ItemType Directory -Path $dir -Force
+        Set-Content -LiteralPath (Join-Path $dir 'keep.txt') -Value 1
+        (Get-Item -LiteralPath $dir).LastWriteTime = (Get-Date).AddDays(-30)
+    }
     foreach ($name in $busy, $idle) {
         $dir = Join-Path $cacheRoot $name
         $null = New-Item -ItemType Directory -Path $dir -Force
@@ -132,6 +149,9 @@ function Test-CacheCleanup($case) {
         $null = & $oneStep -Width 320 -Height 200 -CacheRoot $cacheRoot 6> $null
         if (-not (Test-Path -LiteralPath (Join-Path $cacheRoot $busy))) { $failures.Add('正在使用的过期缓存被删除了') }
         if (Test-Path -LiteralPath (Join-Path $cacheRoot $idle)) { $failures.Add('空闲的过期缓存没有被删除') }
+        foreach ($dir in $foreign, $hexForeign) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir 'keep.txt'))) { $failures.Add("缓存根目录下的无关目录被删除了：$dir") }
+        }
     }
     finally { Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue }
     $failures
@@ -152,6 +172,144 @@ function Test-Matrix($case) {
     if ($built.Count -ne 1) { $failures.Add("期望只构建一次，实际 $($built.Count) 次") }
     $pixel = @($matrix.results | Where-Object dpi -eq 144 | ForEach-Object { Get-PngWidth $_.snapshot } | Select-Object -Unique)
     if ("$pixel" -ne '960') { $failures.Add("144 DPI 截图宽度期望 960，实际 $pixel") }
+    $failures
+}
+
+# 交互步骤：生成宿主并带 -Steps 渲染，返回摘要、退出码与 steps.json。
+function Invoke-Steps([string]$Name, [string]$Sample, $Steps, [hashtable]$Generate = @{}, [hashtable]$Render = @{}) {
+    $generateArgs = @{ WorkDir = Join-Path $ArtifactsDir "harness\$Name"; AssemblyPath = $samples[$Sample]; ViewType = 'SampleViews.InteractionView'
+        Steps = (ConvertTo-Json -InputObject @($Steps) -Depth 10 -Compress) } + $Generate
+    $harness = & $generator @generateArgs
+    $outDir = & $renderer -HarnessDir $harness.WorkDir @Render 6> $null
+    $exitCode = $LASTEXITCODE
+    $summary = Get-Content -LiteralPath (Join-Path "$outDir" 'summary.json') -Raw | ConvertFrom-Json
+    $stepsPath = Join-Path "$outDir" 'steps.json'
+    [pscustomobject]@{ OutDir = "$outDir"; ExitCode = $exitCode; Summary = $summary
+        Steps = if (Test-Path -LiteralPath $stepsPath) { @(Get-Content -LiteralPath $stepsPath -Raw | ConvertFrom-Json) } else { @() } }
+}
+
+# 某一步截图对应的 layout.json 中是否有该文本。
+function Test-StepText($Step, [string]$Text) {
+    if (-not $Step.snapshot) { return $false }
+    $layoutPath = Join-Path (Split-Path -Parent $Step.snapshot) 'layout.json'
+    if (-not (Test-Path -LiteralPath $layoutPath)) { return $false }
+    [bool](@((Get-Content -LiteralPath $layoutPath -Raw | ConvertFrom-Json).nodes) | Where-Object { "$($_.text)" -eq $Text })
+}
+
+# 完整流程（窗口模式）：展开、输入、提交（命令 + 提交后出现的错误绑定）、VSM 悬停、动画取帧、WPF 对话框、MessageBox、setData。
+function Test-Steps($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $steps = @(
+        @{ name = 'initial' }
+        @{ name = 'expand'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }
+        @{ name = 'type'; set = @{ element = 'CustomerBox'; property = 'Text'; value = 'Fabrikam' } }
+        @{ name = 'submit'; invoke = 'SubmitButton'; waitFor = 'data:Status=Submitted' }
+        @{ name = 'hover'; state = @{ element = 'VsmButton'; state = 'MouseOver' } }
+        @{ name = 'fade'; animate = @{ storyboard = 'FadeIn'; atMs = @(0, 150, 300) } }
+        @{ name = 'dialog'; invoke = @{ element = @{ text = 'Open dialog' } } }
+        @{ name = 'message'; invoke = 'MessageButton' }
+        @{ name = 'data'; setData = @{ path = 'Status'; value = 'Done' } }
+    )
+    $run = Invoke-Steps $case.Name $case.Sample $steps -Render @{ WindowHost = $true }
+    $byName = @{}
+    foreach ($step in $run.Steps) { $byName[$step.name] = $step }
+    if ($run.Summary.status -ne 'binding-issues' -or $run.ExitCode -ne 2) { $failures.Add("期望 binding-issues / 2（提交后的错误绑定），实际 $($run.Summary.status) / $($run.ExitCode)：$($run.Summary.error -join '; ')") }
+    $notOk = @($run.Steps | Where-Object status -ne 'ok')
+    if ($run.Steps.Count -ne 9 -or $notOk) { $failures.Add("期望 9 步全部 ok，实际 $($run.Steps.Count) 步；失败：$(@($notOk | ForEach-Object { "$($_.name): $($_.status) $($_.error)" }) -join '; ')") }
+    if ($run.Steps.Count -ne 9) { return $failures }
+    if (Test-StepText $byName.initial 'Order details: 3 items') { $failures.Add('初始画面不应显示折叠的明细') }
+    if (-not (Test-StepText $byName.expand 'Order details: 3 items')) { $failures.Add('展开后 layout.json 中应出现明细文本') }
+    if (-not $byName.expand.changedBoundsDip) { $failures.Add('展开后应有变化区域') }
+    if (-not (Test-StepText $byName.type 'Customer: Fabrikam')) { $failures.Add('输入后双向绑定应更新 CustomerEcho') }
+    if (-not (Test-StepText $byName.submit 'Submitted')) { $failures.Add('提交后 StatusText 应为 Submitted') }
+    $bindingSteps = @($run.Steps | Where-Object { $_.bindingIssueCount -gt 0 } | ForEach-Object name)
+    if ("$bindingSteps" -ne 'submit' -or "$($byName.submit.bindingIssues)" -notlike '*Mesage*') { $failures.Add("错误绑定应只归属到 submit 步：$bindingSteps / $($byName.submit.bindingIssues)") }
+    if (-not $byName.hover.changedBoundsDip) { $failures.Add('VSM 悬停后按钮背景应变化') }
+    $frames = @($byName.fade.frames)
+    if ($frames.Count -ne 3 -or -not $frames[1].changedBoundsDip -or -not $frames[2].changedBoundsDip) {
+        $failures.Add("淡入应得到 3 帧且第 2、3 帧各有变化：$($frames.Count) 帧，变化 $(@($frames | ForEach-Object { $_.changedPixels }) -join ',')")
+    }
+    $dialog = @($byName.dialog.dialogs)
+    if ($dialog.Count -ne 1 -or $dialog[0].kind -ne 'window' -or $dialog[0].title -ne 'Confirm' -or -not (Test-Path -LiteralPath "$($dialog[0].snapshot)")) { $failures.Add("应截取并关闭 Confirm 对话框：$($dialog | ConvertTo-Json -Compress)") }
+    if (-not (Test-StepText $byName.dialog 'Dialog closed')) { $failures.Add('对话框关闭后业务代码应继续执行（Status = Dialog closed）') }
+    $message = @($byName.message.dialogs)
+    if ($message.Count -ne 1 -or $message[0].kind -ne 'messageBox' -or $message[0].text -ne 'Saved successfully') { $failures.Add("应记录并关闭 MessageBox：$($message | ConvertTo-Json -Compress)") }
+    if (-not (Test-StepText $byName.data 'Done')) { $failures.Add('setData 后 StatusText 应为 Done') }
+    if (-not $run.Summary.stepsOverview -or -not (Test-Path -LiteralPath $run.Summary.stepsOverview)) { $failures.Add('缺少 steps-overview.png') }
+    if (@($byName.dialog.warnings) -notmatch '本地化') { $failures.Add('按文本定位应给出本地化提示') }
+    $failures
+}
+
+# 默认模式（无窗口）：属性设置与动画取帧不依赖窗口；同样的步骤两次渲染像素一致（取帧可复现）。
+function Test-StepsLayoutOnly($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $steps = @(
+        @{ name = 'expand'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }
+        @{ name = 'fade'; animate = @{ storyboard = 'FadeIn'; atMs = @(0, 150, 300) } }
+    )
+    $first = Invoke-Steps "$($case.Name)-1" 'net8' $steps
+    $second = Invoke-Steps "$($case.Name)-2" 'net8' $steps
+    if ($first.Summary.status -ne 'ok') { $failures.Add("期望 ok，实际 $($first.Summary.status)：$($first.Summary.error -join '; ')"); return $failures }
+    $frames = @($first.Steps[1].frames)
+    if ($frames.Count -ne 3 -or -not $frames[1].changedBoundsDip -or -not $frames[2].changedBoundsDip) {
+        $failures.Add("默认模式下动画取帧应逐帧变化：$(@($frames | ForEach-Object { $_.changedPixels }) -join ',')")
+    }
+    $hash = { param($run) @($run.Steps[1].frames | ForEach-Object { (Get-FileHash -LiteralPath $_.snapshot -Algorithm SHA256).Hash }) -join ',' }
+    if ((& $hash $first) -ne (& $hash $second)) { $failures.Add('两次渲染的动画帧应完全一致') }
+    $failures
+}
+
+# 失败语义：禁用按钮无法调用时停止并记录；continueOnError 时继续；默认主题按钮的悬停给出明确原因。
+function Test-StepsFailure($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $stop = Invoke-Steps "$($case.Name)-stop" 'net8' @(
+        @{ name = 'disabled'; invoke = 'DisabledButton' }
+        @{ name = 'after'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }
+    )
+    if ($stop.Summary.status -ne 'failed:step' -or $stop.ExitCode -ne 3) { $failures.Add("期望 failed:step / 3，实际 $($stop.Summary.status) / $($stop.ExitCode)") }
+    if ($stop.Steps[0].status -ne 'failed' -or $stop.Steps[0].error -notlike '*禁用*' -or -not (Test-Path -LiteralPath "$($stop.Steps[0].snapshot)")) { $failures.Add("第 1 步应失败（已禁用）并保留失败画面：$($stop.Steps[0] | ConvertTo-Json -Compress -Depth 4)") }
+    if ($stop.Steps[1].status -ne 'skipped') { $failures.Add("失败后应跳过后续步骤：$($stop.Steps[1].status)") }
+    if ("$($stop.Summary.error)" -notlike '*步骤 1*') { $failures.Add("摘要 error 应包含失败步骤：$($stop.Summary.error)") }
+
+    $continue = Invoke-Steps "$($case.Name)-continue" 'net8' @(
+        @{ name = 'theme-hover'; state = @{ element = 'SubmitButton'; state = 'MouseOver' } }
+        @{ name = 'missing'; set = @{ element = 'NoSuchElement'; property = 'IsEnabled'; value = $false } }
+        @{ name = 'after'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }
+    ) -Generate @{ ContinueOnError = $true }
+    if ($continue.Steps[0].error -notlike '*样式触发器*') { $failures.Add("默认主题按钮的悬停应说明无法模拟：$($continue.Steps[0].error)") }
+    if ($continue.Steps[1].error -notlike '*DetailsExpander*') { $failures.Add("找不到元素时应列出可用名称：$($continue.Steps[1].error)") }
+    if ($continue.Steps[2].status -ne 'ok') { $failures.Add("continueOnError 时应继续执行后续步骤：$($continue.Steps[2].status)") }
+
+    try { $null = & $generator -WorkDir (Join-Path $ArtifactsDir "harness\$($case.Name)-bad") -Steps '[{"set":{"element":"x"}}]'; $failures.Add('写法有误的步骤应在生成时报错') }
+    catch { if ($_.Exception.Message -notlike '*缺少 property*') { $failures.Add("步骤校验信息不明确：$($_.Exception.Message)") } }
+    $failures
+}
+
+# custom 步骤：自定义工厂实现 RunStepAsync 时可用；默认工厂未实现时只有用到 custom 才报错。
+function Test-StepsCustom($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $steps = @(@{ name = 'custom'; custom = @{ action = 'SetStatus'; args = @{ status = 'From factory' } } })
+    $with = Invoke-Steps "$($case.Name)-with" 'net8' $steps -Generate @{ FactoryFile = Join-Path $fixtures 'StepsViewFactory.cs' }
+    if ($with.Summary.status -ne 'ok' -or -not (Test-StepText $with.Steps[0] 'From factory')) { $failures.Add("custom 步骤应调用 RunStepAsync：$($with.Summary.status) $($with.Summary.error -join '; ')") }
+    $without = Invoke-Steps "$($case.Name)-without" 'net8' $steps
+    if ($without.Steps[0].error -notlike '*RunStepAsync*') { $failures.Add("未实现 RunStepAsync 时应明确报错：$($without.Steps[0].error)") }
+    $failures
+}
+
+# 业务仓库锁定了本机没有的 SDK（global.json）：在该仓库目录下运行时，宿主仍应使用本机 SDK 构建。
+function Test-GlobalJson($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $repo = Join-Path $ArtifactsDir "$($case.Name)-repo"
+    $null = New-Item -ItemType Directory -Path $repo
+    Set-Content -LiteralPath (Join-Path $repo 'global.json') -Value '{ "sdk": { "version": "6.0.100", "rollForward": "disable" } }'
+    Push-Location -LiteralPath $repo
+    try {
+        $harness = & $generator -WorkDir (Join-Path $repo 'harness')
+        $outDir = & $renderer -HarnessDir $harness.WorkDir -Width 320 -Height 200 6> $null
+        $summary = Get-Content -LiteralPath (Join-Path "$outDir" 'summary.json') -Raw | ConvertFrom-Json
+        if ($summary.status -ne 'ok') { $failures.Add("期望 ok，实际 $($summary.status)：$(@($summary.buildErrors) + @($summary.error) -join '; ')") }
+    }
+    finally { Pop-Location }
     $failures
 }
 
@@ -195,10 +353,16 @@ function New-PresetProject([string]$Name) {
             assemblyPaths = @('bin/SampleViews.dll')
             build = @('dotnet', 'build', $sampleProject, '-f', 'net8.0-windows', '-c', 'Release', '-o', 'bin', '--nologo')
             width = 640; height = 360
+            # 视图写了 xaml 时不应继承这里的 viewType（见 Loose 预设）。
+            viewType = 'SampleViews.OrderView'
         }
         views = [ordered]@{
             Order = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextFactory = 'SampleViews.PreviewData.CreateRemoteOrder'; watch = @('src/Order/**') }
-            Broken = [ordered]@{ viewType = 'SampleViews.BrokenBindingView'; dataContextType = 'SampleViews.OrderPreviewVm'; watch = @('src/Broken/*.txt') }
+            # src/Broken/**/*.txt 也应匹配 src/Broken 下的直接子文件（** 可为零层目录）。
+            Broken = [ordered]@{ viewType = 'SampleViews.BrokenBindingView'; dataContextType = 'SampleViews.OrderPreviewVm'; watch = @('src/Broken/**/*.txt') }
+            Loose = [ordered]@{ xaml = Join-Path $fixtures 'ok.xaml' }
+            Interactive = [ordered]@{ viewType = 'SampleViews.InteractionView'; steps = @(@{ name = 'expand'; set = @{ element = 'DetailsExpander'; property = 'IsExpanded'; value = $true } }) }
+            Sized = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextType = 'SampleViews.OrderPreviewVm'; sizes = @('800x600', '1024x768') }
             Themes = [ordered]@{ viewType = 'SampleViews.OrderView'; dataContextType = 'SampleViews.OrderPreviewVm'; themes = @('light', 'dark') }
         }
     }
@@ -219,6 +383,28 @@ function Test-Preset($case) {
     $wide = & $oneStep -Config (Join-Path $dir 'wpf-render.json') -Preset Order -Width 900 -CacheRoot $cache 6> $null
     $wideSummary = Get-Content -LiteralPath (Join-Path "$wide" 'summary.json') -Raw | ConvertFrom-Json
     if ($wideSummary.pixelSize -ne '900x360') { $failures.Add("显式 -Width 应覆盖预设：$($wideSummary.pixelSize)") }
+    # 显式 -Width 覆盖预设的 sizes（高度仍取预设默认值），显式 -Xaml 覆盖预设的 viewType。
+    $sized = & $oneStep -Config $dir -Preset Sized -Width 700 -CacheRoot $cache 6> $null
+    $sizedSummary = Get-Content -LiteralPath (Join-Path "$sized" 'summary.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+    if ($sizedSummary.pixelSize -ne '700x360') { $failures.Add("显式 -Width 应覆盖预设 sizes：$($sizedSummary.pixelSize)（$sized）") }
+    try {
+        $xamlRun = & $oneStep -Config $dir -Preset Order -Xaml (Join-Path $fixtures 'ok.xaml') -CacheRoot $cache 6> $null
+        $xamlSummary = Get-Content -LiteralPath (Join-Path "$xamlRun" 'summary.json') -Raw | ConvertFrom-Json
+        if ($xamlSummary.status -ne 'ok' -or $xamlSummary.sourceViewType -ne 'System.Windows.Controls.Border') {
+            $failures.Add("显式 -Xaml 应覆盖预设 viewType：$($xamlSummary.status) / $($xamlSummary.sourceViewType)")
+        }
+        # 视图层的 xaml 同样覆盖 defaults 中的 viewType。
+        $looseRun = & $oneStep -Config $dir -Preset Loose -CacheRoot $cache 6> $null
+        $looseSummary = Get-Content -LiteralPath (Join-Path "$looseRun" 'summary.json') -Raw | ConvertFrom-Json
+        if ($looseSummary.sourceViewType -ne 'System.Windows.Controls.Border') { $failures.Add("视图的 xaml 应覆盖 defaults 的 viewType：$($looseSummary.sourceViewType)") }
+    }
+    catch { $failures.Add("显式 -Xaml / 视图 xaml 应覆盖 viewType：$($_.Exception.Message)") }
+    # 预设中的 steps；与多主题同时使用时报错。
+    $interactive = & $oneStep -Config $dir -Preset Interactive -CacheRoot $cache 6> $null
+    $interactiveSummary = Get-Content -LiteralPath (Join-Path "$interactive" 'summary.json') -Raw | ConvertFrom-Json
+    if ($interactiveSummary.status -ne 'ok' -or @($interactiveSummary.steps).Count -ne 1) { $failures.Add("预设 steps 应执行 1 步：$($interactiveSummary.status) / $(@($interactiveSummary.steps).Count)") }
+    try { $null = & $oneStep -Config $dir -Preset Interactive -Theme light, dark -CacheRoot $cache 6> $null; $failures.Add('steps 与多主题同时使用应报错') }
+    catch { if ($_.Exception.Message -notlike '*交互步骤不能*') { $failures.Add("steps 与多主题冲突的报错不明确：$($_.Exception.Message)") } }
     $themes = & $oneStep -Config $dir -Preset Themes -CacheRoot $cache 6> $null
     $matrix = Get-Content -LiteralPath (Join-Path "$themes" 'matrix.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
     if ($matrix.rendered -ne 2) { $failures.Add("Themes 预设应渲染 2 个组合：$($matrix.rendered)") }
@@ -232,7 +418,8 @@ function Test-Preset($case) {
 # Stop hook：改动 watch 覆盖的文件后，绑定错误阻止结束；同一份改动不重复拦截；改动正常视图时放行。
 function Test-Hook($case) {
     $failures = [Collections.Generic.List[string]]::new()
-    $dir = New-PresetProject $case.Name
+    # 中文目录：hook 的输入（cwd）与 git 输出必须按 UTF-8 解码，否则找不到 wpf-render.json、匹配不到改动。
+    $dir = New-PresetProject "$($case.Name)-中文目录"
     foreach ($file in 'src/Order/a.txt', 'src/Broken/b.txt') {
         $path = Join-Path $dir $file
         $null = New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force
@@ -263,7 +450,8 @@ function Test-Hook($case) {
     $decision = try { $first | ConvertFrom-Json } catch { $null }
     if ($decision.decision -ne 'block' -or $decision.reason -notlike '*CustomerNmae*') { $failures.Add("改动 Broken 后应阻止结束并给出绑定结论：$first") }
     $second = & $invoke
-    if ($second) { $failures.Add("同一份改动不应重复拦截：$second") }
+    # 只看输出为空不够：hook 崩溃时也没有标准输出。
+    if ($second -or $LASTEXITCODE -ne 0) { $failures.Add("同一份改动不应重复拦截：$second（退出码 $LASTEXITCODE）") }
 
     $null = & git -C $dir checkout -q -- src/Broken/b.txt 2>&1
     Set-Content -LiteralPath (Join-Path $dir 'src/Order/a.txt') -Value 'v2'
@@ -272,13 +460,14 @@ function Test-Hook($case) {
 
     $unrelated = @{ cwd = $ArtifactsDir; session_id = $session } | ConvertTo-Json -Compress
     $quiet = (($unrelated | & pwsh -NoProfile -NonInteractive -File $hook) -join '').Trim()
-    if ($quiet) { $failures.Add("没有 wpf-render.json 的目录应静默退出：$quiet") }
+    if ($quiet -or $LASTEXITCODE -ne 0) { $failures.Add("没有 wpf-render.json 的目录应静默退出：$quiet（退出码 $LASTEXITCODE）") }
 
     # 授权后修改配置（例如 build 命令）：授权失效，提示重新授权。
     Add-Content -LiteralPath (Join-Path $dir 'wpf-render.json') -Value ' '
     Set-Content -LiteralPath (Join-Path $dir 'src/Broken/b.txt') -Value 'v3'
     $changed = (((@{ cwd = $dir; session_id = "$session-changed" } | ConvertTo-Json -Compress) | & pwsh -NoProfile -NonInteractive -File $hook) -join '').Trim()
-    if ($changed -like '*"decision"*' -or $changed -notlike '*修改*') { $failures.Add("配置修改后应要求重新授权：$changed") }
+    $changedNotice = try { $changed | ConvertFrom-Json } catch { $null }
+    if ($changedNotice.decision -or $changedNotice.systemMessage -notlike '*修改*') { $failures.Add("配置修改后应要求重新授权：$changed") }
     }
     finally { $env:WPF_RENDER_TRUST_FILE = $previousTrust }
     $failures
@@ -354,6 +543,9 @@ function Test-Case($case) {
             }
             'elementWidthDip' {
                 if ("$(@($manifest.elementRectDip)[2])" -ne "$expected") { $failures.Add("元素宽度期望 $expected，实际 $(@($manifest.elementRectDip)[2])") }
+            }
+            'elementRectDip' {
+                if ((@($manifest.elementRectDip) -join ',') -ne $expected) { $failures.Add("元素矩形期望 $expected，实际 $(@($manifest.elementRectDip) -join ',')") }
             }
             'elementPixelWidth' {
                 $width = if ($summary.elementSnapshot) { Get-PngWidth $summary.elementSnapshot }

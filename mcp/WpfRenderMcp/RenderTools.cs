@@ -19,7 +19,8 @@ public sealed class RenderTools(ScriptRunner runner)
     [Description("在独立临时进程中把真实 WPF UserControl / Page / Window 或松散 XAML 离屏渲染成 PNG（需要 Windows）。"
         + "返回 JSON 摘要（status、bindingIssues 单行绑定结论、layoutIssues 布局问题、尺寸、outDir）和截图。"
         + "业务项目有 wpf-render.json 时优先用 config + preset（先用 list_views 查看可用视图），build=true 会先构建业务项目；"
-        + "否则传 assemblyPaths + viewType / xaml。都不传时渲染内置样例。同一组程序集第二次起跳过宿主构建。")]
+        + "否则传 assemblyPaths + viewType / xaml。都不传时渲染内置样例。同一组程序集第二次起跳过宿主构建。"
+        + "传 steps 时在初始截图后依次执行交互步骤（设置属性、点击、切换状态、动画取帧等），每步截图并检查，返回每步摘要与总览图。")]
     public async Task<CallToolResult> RenderView(
         [Description("wpf-render.json 的绝对路径或其所在目录（业务项目根目录）")] string? config = null,
         [Description("wpf-render.json 中的视图名；其余参数省略时取预设值，显式传入时覆盖")] string? preset = null,
@@ -40,10 +41,26 @@ public sealed class RenderTools(ScriptRunner runner)
         [Description("另存该 x:Name 元素的截图")] string? element = null,
         [Description("显式宿主 TFM，如 net48 / net8.0-windows；省略时自动推断")] string? targetFramework = null,
         [Description("显式位数 AnyCPU / x86 / x64 / ARM64；省略时自动推断")] string? platform = null,
+        [Description("交互步骤数组。每步可选 name / waitMs / waitFor / timeoutMs / capture，加至多一个动作："
+            + "set {element, property, value}（设置控件属性，如 IsExpanded / Text / SelectedIndex）；setData {path, value}（DataContext 上的属性路径）；"
+            + "invoke {element}（经 UI 自动化点击按钮 / 切换开关 / 展开 / 选中）；command {element} 或 {path, parameter}；"
+            + "state {element, state}（VisualStateManager 状态，如 MouseOver；默认主题的触发器式悬停无法模拟）；focus {element}；"
+            + "animate {element?, storyboard 或 trigger, atMs: [0,150,300]}（动画按时刻取帧）；custom {action, args}（业务 ViewFactory.RunStepAsync）。"
+            + "element 为 x:Name 字符串，或 {name / automationId / text / type / index}。waitFor：property:元素.属性=值、data:路径=值、factory。"
+            + "不能与多主题 / 尺寸 / DPI 同时使用；预设中也可以写 steps。")] JsonElement? steps = null,
+        [Description("某步失败后继续执行其余步骤（默认停止）")] bool? continueOnError = null,
+        [Description("live（默认）或 settle：截图前把事件触发器启动的动画跳到结束状态")] string? animations = null,
+        [Description("有步骤时是否附带每步截图（最多 6 张；总览图始终附带）")] bool includeStepImages = false,
         [Description("是否在结果中附带截图")] bool includeImage = true,
         CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows()) return WindowsOnly();
+        if (steps is { ValueKind: not JsonValueKind.Array and not JsonValueKind.Null and not JsonValueKind.Undefined })
+            return Error("steps 应为数组，每个元素是一步。");
+        if ((RelativePathError(("config", config), ("xaml", xaml), ("factoryFile", factoryFile)) ?? RelativePathError("assemblyPaths", assemblyPaths)) is { } pathError)
+            return Error(pathError);
+        if (preset is not null && config is null && runner.StartedInPluginRoot)
+            return Error("使用 preset 时需要传 config（wpf-render.json 的绝对路径或所在目录）：服务器的工作目录是插件目录，无法向上查找业务项目的配置。");
         var arguments = ViewArguments(assemblyPaths, viewType, xaml, dataContextType, resourceDictionaries, targetFramework, platform);
         arguments["Config"] = config;
         arguments["Preset"] = preset;
@@ -57,6 +74,9 @@ public sealed class RenderTools(ScriptRunner runner)
         arguments["Background"] = background;
         arguments["WindowHost"] = windowHost;
         arguments["Element"] = element;
+        arguments["Steps"] = steps is { ValueKind: JsonValueKind.Array } ? steps.Value.GetRawText() : null;
+        arguments["ContinueOnError"] = continueOnError;
+        arguments["Animations"] = animations;
         var result = await runner.RunAsync(Path.Combine("scripts", "render.ps1"), arguments, TimeSpan.FromMinutes(20), cancellationToken);
         if (LastOutput(result) is not { } outDir) return ScriptFailure(result);
         // 预设可能配置了多个主题 / 尺寸 / DPI，此时得到的是汇总目录。
@@ -73,6 +93,12 @@ public sealed class RenderTools(ScriptRunner runner)
         {
             AddImage(content, summary["snapshot"]?.GetValue<string>(), "截图");
             AddImage(content, summary["elementSnapshot"]?.GetValue<string>(), "元素截图");
+            AddImage(content, summary["stepsOverview"]?.GetValue<string>(), "步骤总览图");
+            if (includeStepImages && summary["steps"] is JsonArray stepList)
+            {
+                foreach (var step in stepList.Take(6))
+                    AddImage(content, step?["snapshot"]?.GetValue<string>(), $"步骤 {step?["index"]} {step?["name"]?.GetValue<string>()}");
+            }
         }
         return new CallToolResult { Content = content, IsError = IsFailed(summary) };
     }
@@ -81,13 +107,15 @@ public sealed class RenderTools(ScriptRunner runner)
     [Description("列出业务项目 wpf-render.json 中配置的视图（名称、视图类型、主题 / 尺寸、watch 文件模式），供 render_view 的 preset 参数使用。")]
     public CallToolResult ListViews([Description("wpf-render.json 的绝对路径或其所在目录")] string config)
     {
+        if (RelativePathError(("config", config)) is { } pathError) return Error(pathError);
         var path = Directory.Exists(config) ? Path.Combine(config, "wpf-render.json") : config;
         if (ReadJson(path) is not { } file) return Error($"找不到或无法解析 {path}。");
         var defaults = file["defaults"] as JsonObject;
         var views = new JsonArray();
         foreach (var (name, value) in file["views"] as JsonObject ?? [])
         {
-            JsonNode? Setting(string key) => (value?[key] ?? defaults?[key])?.DeepClone();
+            // 视图设置了互斥键中的一个时，不再继承 defaults 中的另一个（与 render.ps1 的合并规则一致）。
+            JsonNode? Setting(string key) => (value?[key] ?? (Exclusive(key).Any(other => value?[other] is not null) ? null : defaults?[key]))?.DeepClone();
             views.Add(new JsonObject
             {
                 ["name"] = name,
@@ -121,6 +149,7 @@ public sealed class RenderTools(ScriptRunner runner)
         CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows()) return WindowsOnly();
+        if ((RelativePathError(("xaml", xaml)) ?? RelativePathError("assemblyPaths", assemblyPaths)) is { } pathError) return Error(pathError);
         var arguments = ViewArguments(assemblyPaths, viewType, xaml, dataContextType, resourceDictionaries, targetFramework, platform);
         arguments["Theme"] = themes is { Length: > 0 } ? themes : new[] { "light", "dark" };
         arguments["Size"] = sizes is { Length: > 0 } ? sizes : null;
@@ -157,6 +186,7 @@ public sealed class RenderTools(ScriptRunner runner)
         CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows()) return WindowsOnly();
+        if (RelativePathError(("before", before), ("after", after)) is { } pathError) return Error(pathError);
         var arguments = new Dictionary<string, object?> { ["Before"] = before, ["After"] = after, ["Tolerance"] = tolerance };
         var result = await runner.RunAsync(Path.Combine("scripts", "compare-snapshots.ps1"), arguments, TimeSpan.FromMinutes(5), cancellationToken);
         JsonNode? comparison = null;
@@ -171,7 +201,7 @@ public sealed class RenderTools(ScriptRunner runner)
     }
 
     [McpServerTool(Name = "get_layout", Title = "Query WPF layout", ReadOnly = true, Idempotent = true, OpenWorld = false)]
-    [Description("读取一次渲染的 layout.json 并筛选：布局问题（可按 kind 过滤），以及名称或文本匹配 element 的元素及其子树（DIP 坐标 [x,y,w,h]，相对根元素）。"
+    [Description("读取一次渲染的 layout.json 并筛选：布局问题（可按 kind 过滤），以及名称或文本匹配 element 的元素及其子树（DIP 坐标 [x,y,w,h]，截图坐标）。"
         + "用于定位 layoutIssues 或 compare_snapshots 变化区域对应的元素，不必读取整个视觉树。")]
     public CallToolResult GetLayout(
         [Description("render_view 返回的 outDir")] string outDir,
@@ -179,6 +209,7 @@ public sealed class RenderTools(ScriptRunner runner)
         [Description("只返回该类型的布局问题：text-truncated / clipped / overlap / zero-size / out-of-viewport")] string? kind = null,
         [Description("最多返回的节点数")] int maxNodes = 200)
     {
+        if (RelativePathError(("outDir", outDir)) is { } pathError) return Error(pathError);
         var layout = ReadJson(Path.Combine(outDir, "layout.json"));
         if (layout is null) return Error($"找不到 {Path.Combine(outDir, "layout.json")}（渲染是否成功？）");
         var issues = (layout["issues"] as JsonArray ?? [])
@@ -226,6 +257,29 @@ public sealed class RenderTools(ScriptRunner runner)
         return new CallToolResult { Content = [new TextContentBlock { Text = text }], IsError = result.ExitCode != 0 };
     }
 
+    private static string[] Exclusive(string key) => key switch
+    {
+        "viewType" => ["xaml"],
+        "xaml" => ["viewType"],
+        "sizes" => ["width", "height"],
+        _ => [],
+    };
+
+    // 相对路径按服务器的工作目录解析。Codex 等客户端以插件目录为工作目录启动服务器，此时相对路径会指向插件内部，直接报错。
+    private string? RelativePathError(params (string Name, string? Value)[] paths)
+    {
+        if (!runner.StartedInPluginRoot) return null;
+        foreach (var (name, value) in paths)
+        {
+            if (!string.IsNullOrEmpty(value) && !Path.IsPathFullyQualified(value))
+                return $"{name} 需要绝对路径（收到 {value}）：服务器的工作目录是插件目录，相对路径会解析到插件内部。";
+        }
+        return null;
+    }
+
+    private string? RelativePathError(string name, string[]? values) =>
+        RelativePathError((values ?? []).Select(value => (name, (string?)value)).ToArray());
+
     private static Dictionary<string, object?> ViewArguments(string[]? assemblyPaths, string? viewType, string? xaml, string? dataContextType,
         string[]? resourceDictionaries, string? targetFramework, string? platform) => new()
     {
@@ -244,7 +298,8 @@ public sealed class RenderTools(ScriptRunner runner)
     private static JsonNode? ReadJson(string path)
     {
         if (!File.Exists(path)) return null;
-        try { return JsonNode.Parse(File.ReadAllText(path)); }
+        // 与 PowerShell 的 ConvertFrom-Json 一样容忍注释与尾逗号，否则带注释的 wpf-render.json 能渲染却列不出视图。
+        try { return JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }); }
         catch (JsonException) { return null; }
     }
 

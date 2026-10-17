@@ -71,3 +71,21 @@ jobs:
           claude plugin validate --strict .claude-plugin/plugin.json
           claude plugin validate --strict .
           claude plugin validate --strict skills
+
+  mcp-net10-only:
+    # 只装了 .NET 10（没有 .NET 8 运行时）的机器：MCP 服务器面向 net8.0，靠 RollForward=Major 在 10 上运行。
+    runs-on: ubuntu-latest
+    container: mcr.microsoft.com/dotnet/sdk:10.0
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Only .NET 10 runtimes present
+        shell: pwsh
+        run: |
+          dotnet --list-runtimes
+          if (dotnet --list-runtimes | Select-String ' 8\.') { throw '容器中意外存在 .NET 8 运行时' }
+
+      - name: Run MCP protocol tests
+        shell: pwsh
+        run: dotnet run --project mcp/WpfRenderMcp.Tests -c Release -- --root .

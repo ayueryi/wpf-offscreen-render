@@ -97,6 +97,23 @@ namespace SampleViews
         }
     }
 
+    // 固定尺寸的视图在更大的画布上居中排列：元素坐标与布局报告应换算到截图坐标（含根元素自身的偏移）。
+    public sealed class CenteredView : UserControl
+    {
+        public CenteredView()
+        {
+            Width = 400;
+            Height = 200;
+            var grid = new Grid { Background = Brushes.White };
+            grid.Children.Add(new Button
+            {
+                Name = "CenteredButton", Content = "OK", Width = 100, Height = 30, Margin = new Thickness(10),
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top
+            });
+            Content = grid;
+        }
+    }
+
     // 故意把 Customer 拼错，渲染应以退出码 2 报告绑定问题。
     public sealed class BrokenBindingView : OrderView
     {

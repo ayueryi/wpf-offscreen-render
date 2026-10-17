@@ -9,6 +9,17 @@ public sealed class ScriptRunner(string root)
 {
     public string Root { get; } = root;
 
+    // Codex 等客户端以插件目录为工作目录启动服务器（Claude Code 则是项目目录）：此时相对路径没有意义。
+    public bool StartedInPluginRoot { get; } = IsSameOrInside(Environment.CurrentDirectory, root);
+
+    private static bool IsSameOrInside(string path, string root)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        return full.Equals(rootFull, comparison) || full.StartsWith(rootFull + Path.DirectorySeparatorChar, comparison);
+    }
+
     public sealed record Result(string[] Output, int ExitCode, string? Error, string StandardError);
 
     public async Task<Result> RunAsync(string relativeScript, Dictionary<string, object?> arguments, TimeSpan timeout,
@@ -31,7 +42,8 @@ public sealed class ScriptRunner(string root)
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                WorkingDirectory = Root,
+                // 与服务器相同的工作目录（代理会话的项目目录）：相对路径与向上查找 wpf-render.json 在各工具中含义一致。
+                WorkingDirectory = Environment.CurrentDirectory,
             };
             // -ExecutionPolicy Bypass 只作用于这个进程：从 ZIP 解压（带“来自网络”标记）或策略为 AllSigned 时脚本也能运行。
             foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(Root, "mcp", "invoke-script.ps1"),
@@ -48,7 +60,9 @@ public sealed class ScriptRunner(string root)
             try { await process.WaitForExitAsync(timeoutSource.Token); }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                // 进程树中可能有已退出或无权终止的进程：终止失败不能掩盖超时结论。
+                try { process.Kill(entireProcessTree: true); }
+                catch (Exception ex) when (ex is InvalidOperationException or AggregateException or System.ComponentModel.Win32Exception) { }
                 if (cancellationToken.IsCancellationRequested) throw;
                 return new Result([], 1, $"脚本超过 {timeout.TotalSeconds:0} 秒未完成，已终止。", await stderr);
             }

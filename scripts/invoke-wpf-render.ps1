@@ -17,7 +17,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'WPF 渲染需要 Windows。' }
-$HarnessDir = (Resolve-Path -LiteralPath $HarnessDir).Path
+$HarnessDir = (Resolve-Path -LiteralPath $HarnessDir).ProviderPath
 $projectPath = Join-Path $HarnessDir 'RenderHarness.csproj'
 if (-not (Test-Path -LiteralPath $projectPath)) { throw "工程不存在：$projectPath" }
 if ([math]::Ceiling($Width * $Dpi / 96.0) * [math]::Ceiling($Height * $Dpi / 96.0) -gt 60000000) {
@@ -43,14 +43,56 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
     $buildErrors = @(if ($Stage -eq 'build' -and (Test-Path -LiteralPath $buildLog)) {
         @(Select-String -LiteralPath $buildLog -Pattern ': error ' | Select-Object -First 10 | ForEach-Object { $_.Line.Trim() } | Select-Object -Unique)
     })
+    # 没有 error.txt 的崩溃（如缺少 WindowsDesktop 运行时，宿主在 Main 之前退出）：用 stderr 末尾说明原因。
+    $errorLines = @(& $read 'error.txt' 15)
+    $stderrLog = Join-Path $outDir 'render.stderr.log'
+    if ($errorLines.Count -eq 0 -and $ExitCode -notin 0, 2, 3 -and (Test-Path -LiteralPath $stderrLog)) {
+        $errorLines = @(Get-Content -LiteralPath $stderrLog -Tail 15 | Where-Object { $_.Trim() })
+    }
+    # 交互步骤：每步一行摘要，失败步骤的原因并入 error；所有截图（含动画帧）拼成总览图。
+    $stepsData = & $readJson 'steps.json'
+    $steps = $null
+    $stepsOverview = $null
+    if ($null -ne $stepsData) {
+        $stepsData = @($stepsData)
+        $steps = @($stepsData | ForEach-Object {
+                [ordered]@{
+                    index = $_.index; name = $_.name; action = $_.action; status = $_.status; error = $_.error
+                    snapshot = $_.snapshot; changedBoundsDip = $_.changedBoundsDip
+                    bindingIssues = @($_.bindingIssues | Select-Object -First 3); layoutIssueCount = $_.layoutIssueCount
+                    frames = @($_.frames | Where-Object { $_ } | ForEach-Object { [ordered]@{ atMs = $_.atMs; snapshot = $_.snapshot; changedBoundsDip = $_.changedBoundsDip } })
+                    dialogs = @($_.dialogs | Where-Object { $_ } | ForEach-Object { "$($_.kind)：$($_.title) $($_.text)".Trim() })
+                    warnings = @($_.warnings)
+                }
+            })
+        $failedSteps = @($stepsData | Where-Object status -eq 'failed')
+        if ($failedSteps) { $errorLines = @($failedSteps | ForEach-Object { "[步骤 $($_.index) $($_.name)] $($_.error)" }) + $errorLines }
+        $tiles = [Collections.Generic.List[object]]::new()
+        if (Test-Path -LiteralPath $snapshot) { $tiles.Add(@($snapshot, '0 · 初始')) }
+        foreach ($step in $stepsData) {
+            if ($step.frames) { foreach ($frame in $step.frames) { $tiles.Add(@($frame.snapshot, "$($step.index) · $($step.name) @$($frame.atMs)ms")) } }
+            elseif ($step.snapshot) { $tiles.Add(@($step.snapshot, "$($step.index) · $($step.name)$(if ($step.status -ne 'ok') { " · $($step.status)" })")) }
+        }
+        $tiles = @($tiles | Where-Object { Test-Path -LiteralPath $_[0] })
+        if ($tiles.Count -gt 1) {
+            try {
+                . (Join-Path $PSScriptRoot 'ImageTools.ps1')
+                $stepsOverview = Join-Path $outDir 'steps-overview.png'
+                [WpfOffscreenRender.ImageTools]::ContactSheet([string[]]@($tiles | ForEach-Object { $_[0] }), [string[]]@($tiles | ForEach-Object { $_[1] }), $stepsOverview, 360)
+            }
+            catch { $stepsOverview = $null; Write-Warning "步骤总览图生成失败：$($_.Exception.Message)" }
+        }
+    }
     $summary = [ordered]@{
-        status = switch ($ExitCode) { 0 { 'ok' } 2 { 'binding-issues' } default { "failed:$Stage" } }
+        status = switch ($ExitCode) { 0 { 'ok' } 2 { 'binding-issues' } 3 { 'failed:step' } default { "failed:$Stage" } }
         toolVersion = $manifest.toolVersion
         exitCode = $ExitCode
         outDir = $outDir
         snapshot = if (Test-Path -LiteralPath $snapshot) { $snapshot } else { $null }
         elementSnapshot = if (Test-Path -LiteralPath (Join-Path $outDir 'element.png')) { Join-Path $outDir 'element.png' } else { $null }
         elementRectDip = $manifest.elementRectDip
+        elementError = $manifest.elementError
+        warning = $manifest.warning
         sourceViewType = $manifest.sourceViewType
         mode = $manifest.mode
         theme = $Theme
@@ -63,9 +105,10 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
         layoutIssueCount = $manifest.layoutIssueCount
         layoutIssues = $layoutIssues
         buildErrors = $buildErrors
-        error = @(& $read 'error.txt' 15)
+        error = $errorLines
     }
-    $json = $summary | ConvertTo-Json -Depth 3
+    if ($null -ne $steps) { $summary.steps = $steps; $summary.stepsOverview = $stepsOverview }
+    $json = $summary | ConvertTo-Json -Depth 6
     [IO.File]::WriteAllText((Join-Path $outDir 'summary.json'), $json, [Text.UTF8Encoding]::new($false))
     Write-Host $json
     $global:LASTEXITCODE = $ExitCode
@@ -73,8 +116,15 @@ function Complete-Render([int]$ExitCode, [string]$Stage) {
 }
 
 if (-not $NoBuild) {
-    & dotnet build $projectPath -c Debug --nologo -o $binDir *> (Join-Path $outDir 'build.log')
-    if ($LASTEXITCODE -ne 0) { Complete-Render 1 'build'; return }
+    # dotnet 按当前目录查找 global.json：在宿主目录内构建，才会用到宿主自带的空 global.json，而不是业务仓库锁定的 SDK。
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        [IO.File]::WriteAllText((Join-Path $outDir 'error.txt'), '找不到 dotnet：需要安装 .NET 8 或更高版本的 SDK，并确保 dotnet 在 PATH 中。')
+        Complete-Render 1 'build'; return
+    }
+    Push-Location -LiteralPath $HarnessDir
+    try { & dotnet build $projectPath -c Debug --nologo -o $binDir *> (Join-Path $outDir 'build.log'); $buildCode = $LASTEXITCODE }
+    finally { Pop-Location }
+    if ($buildCode -ne 0) { Complete-Render 1 'build'; return }
 }
 # .NET Framework 与启用 apphost 的工程直接运行 exe（位数由 PlatformTarget 决定）；其余经 dotnet 宿主运行 dll。
 $properties = ([xml](Get-Content -LiteralPath $projectPath -Raw)).Project.PropertyGroup
@@ -91,11 +141,12 @@ if (-not (Test-Path -LiteralPath $entry)) {
     $entry = $legacy.FullName
 }
 $startInfo = [Diagnostics.ProcessStartInfo]::new()
+$dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
 $arguments = @('--out', $outDir, '--width', "$Width", '--height', "$Height", '--dpi', "$Dpi", '--theme', $Theme,
     '--background', $Background)
 if ($useAppHost) { $startInfo.FileName = $entry }
 else {
-    $startInfo.FileName = (Get-Command dotnet -ErrorAction Stop).Source
+    $startInfo.FileName = if ($dotnet) { $dotnet.Source } else { 'dotnet' }
     $arguments = @($entry) + $arguments
 }
 $startInfo.WorkingDirectory = $HarnessDir
@@ -115,7 +166,12 @@ $process.StartInfo = $startInfo
 $exitCode = 1
 $stage = 'render'
 try {
-    $null = $process.Start()
+    # 进程无法启动（AppLocker / 软件限制策略拦截 %TEMP% 下的 exe、找不到 dotnet 等）也要写出 summary.json。
+    try { $null = $process.Start() }
+    catch {
+        [IO.File]::WriteAllText((Join-Path $outDir 'error.txt'), "无法启动渲染进程 $($startInfo.FileName)：$($_.Exception.Message)（若被 AppLocker 等策略拦截，用 -WorkDir / -CacheRoot 把宿主放到允许执行的目录）")
+        Complete-Render 1 'start'; return
+    }
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
     $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -128,8 +184,11 @@ try {
             break
         }
     }
-    [IO.File]::WriteAllText((Join-Path $outDir 'render.stdout.log'), $stdout.GetAwaiter().GetResult())
-    [IO.File]::WriteAllText((Join-Path $outDir 'render.stderr.log'), $stderr.GetAwaiter().GetResult())
+    # 业务代码启动的子进程会继承输出管道：宿主退出后管道可能仍未关闭，读取不能无限等待。
+    foreach ($stream in @(@($stdout, 'render.stdout.log'), @($stderr, 'render.stderr.log'))) {
+        $text = if ($stream[0].Wait(5000)) { $stream[0].Result } else { '（输出管道仍被业务代码启动的子进程占用，未读取完）' }
+        [IO.File]::WriteAllText((Join-Path $outDir $stream[1]), $text)
+    }
     if (-not (Test-Path -LiteralPath (Join-Path $outDir 'error.txt'))) { $exitCode = $process.ExitCode }
 }
 finally { $process.Dispose() }

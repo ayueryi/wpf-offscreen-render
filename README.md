@@ -1,7 +1,7 @@
 # WPF Offscreen Render
 
 [![CI](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml/badge.svg)](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-1.1.1-blue)
+![version](https://img.shields.io/badge/version-1.3.0-blue)
 ![.NET](https://img.shields.io/badge/WPF-.NET%20Framework%204.7.2%20%E2%80%93%20.NET%2010-512BD4)
 
 让 AI 编码代理（Antigravity、Codex、Claude Code 等）**亲眼看到**自己改出来的 WPF 界面：在独立的临时进程里把真实的 `UserControl` / `Page` / `Window` 渲染成 PNG，并给出解析好的绑定错误和布局问题。
@@ -20,10 +20,11 @@
 - **结论可直接使用**：绑定错误解析成一行结论（如 `TextBlock.Text <- Path=CustomerNmae（数据源 OrderVm）`）；自动检查文本截断、被裁切、文本重叠、尺寸为 0、超出视口。
 - **为代理设计**：内置 MCP 服务器，作为 Antigravity / Claude Code / Codex 插件一条命令安装；代理调用一次即可拿到截图和 JSON 摘要。
 - **覆盖常见验证场景**：多主题 × 尺寸 × DPI 一次渲染并拼成总览图，修改前后像素对比，截取单个元素。
+- **交互步骤与动画取帧**：按顺序执行展开、输入、点击提交、切换 VisualState、执行命令等动作，每步截图并检查绑定与布局；动画按时刻（如 0 / 150 / 300 ms）取帧，结果可复现。
 - **兼容面广**：.NET Framework 4.7.2 / 4.8 / 4.8.1 与 .NET 5 – 10，按业务程序集自动选择宿主框架与位数（含 x86）。
 - **可以强制执行**：业务项目登记视图后，代理结束本轮回答前会自动渲染改动涉及的页面，有绑定错误时让代理继续修复。
 
-**适用范围**：只能在 **Windows** 上渲染（云端 Linux 容器中的代理会话用不了）。快照不包含 `Popup` / `ToolTip`、`HwndHost`、WebView 等原生内容，也不能证明性能与交互。不适用于 WinUI、UWP、Avalonia、MAUI。
+**适用范围**：只能在 **Windows** 上渲染（云端 Linux 容器中的代理会话用不了）。快照不包含 `Popup` / `ToolTip`、`HwndHost`、WebView 等原生内容，也不能证明性能；交互只覆盖能用代码确定性驱动的部分（见[交互步骤](references/steps.md#限制)，默认主题的鼠标悬停 / 按下样式截不到，拖拽、手势等真实输入不在范围内）。不适用于 WinUI、UWP、Avalonia、MAUI。
 
 ## 目录
 
@@ -38,7 +39,77 @@
 
 ## 安装到代理
 
-**前提**：Windows 本机，已安装 PowerShell 7（`pwsh`）与 .NET 8 或更高版本的 SDK。MCP 服务器首次启动时会编译到 `%LOCALAPPDATA%\wpf-offscreen-render\mcp`，需要几秒钟，之后直接启动。首次编译需要访问 NuGet；离线或内网环境的做法见 [verification.md](references/verification.md#离线与内网环境)。
+**前提**：Windows 本机，已安装 PowerShell 7（`pwsh`）与 .NET 8 或更高版本的 SDK（只装了 .NET 9 / 10 也可以，MCP 服务器与内置样例会前滚到已安装的版本）。MCP 服务器首次启动时会编译到 `%LOCALAPPDATA%\wpf-offscreen-render\mcp`，之后直接启动。冷启动的首次编译（含 NuGet 还原）可能超过客户端的 MCP 启动超时，建议安装后先预热一次：`pwsh -ExecutionPolicy Bypass -File <插件目录>\mcp\start.ps1 -BuildOnly`（Claude Code 也可以用环境变量 `MCP_TIMEOUT` 调大超时；Codex 插件已把启动与工具调用超时设为 180 秒 / 30 分钟）。首次编译需要访问 NuGet；离线或内网环境的做法见 [verification.md](references/verification.md#离线与内网环境)。
+
+### 让代理帮你安装 / 更新
+
+把下面的提示词原样发给对应的代理即可：它会检查环境、安装或更新插件、预编译 MCP 服务器并自检。安装或更新后需要**重启会话**插件才生效。命令需要联网（GitHub、NuGet），并会写入用户目录（插件缓存、`%LOCALAPPDATA%\wpf-offscreen-render`）：Codex 的沙箱默认禁止这些操作，出现授权请求时批准即可。
+
+<details open>
+<summary><b>Claude Code：安装</b></summary>
+
+```text
+请帮我安装 wpf-offscreen-render 插件（WPF 离屏渲染，仓库 ayueryi/wpf-offscreen-render）：
+1. 确认本机是 Windows，`pwsh -v` 为 7.x，`dotnet --list-sdks` 中有 8.0 或更高版本的 SDK；不满足时停下来告诉我缺什么，不要自行安装。
+2. 运行 `claude plugin marketplace add ayueryi/wpf-offscreen-render`（提示已存在时跳过），再运行 `claude plugin install wpf-offscreen-render@wpf-offscreen-render`。
+3. 从 `claude plugin list --json` 中取该插件的 installPath，运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<installPath>\mcp\start.ps1" -BuildOnly` 预编译 MCP 服务器（首次需要访问 NuGet，可能要一分钟左右）。
+4. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<installPath>\tests\run-tests.ps1" -Quick`，确认输出 `2 通过，0 失败`。
+5. 告诉我安装的版本、installPath 和自检结果，并提醒我重启 Claude Code 会话。
+```
+
+</details>
+
+<details>
+<summary><b>Claude Code：更新</b></summary>
+
+```text
+请把 wpf-offscreen-render 插件更新到最新版本：
+1. 先用 `claude plugin list --json` 记下当前版本，然后运行 `claude plugin marketplace update wpf-offscreen-render` 和 `claude plugin update wpf-offscreen-render@wpf-offscreen-render`。
+2. 版本有变化时，从 `claude plugin list --json` 取新的 installPath，运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<installPath>\mcp\start.ps1" -BuildOnly` 预编译新版本的 MCP 服务器，再运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<installPath>\tests\run-tests.ps1" -Quick` 自检（应输出 `2 通过，0 失败`）。
+3. 告诉我更新前后的版本号，根据 `<installPath>\CHANGELOG.md` 概括这之间的变化，并提醒我重启 Claude Code 会话。
+```
+
+</details>
+
+<details>
+<summary><b>Codex：安装</b></summary>
+
+```text
+请帮我安装 wpf-offscreen-render 插件（WPF 离屏渲染，仓库 ayueryi/wpf-offscreen-render）：
+1. 确认本机是 Windows，`pwsh -v` 为 7.x，`dotnet --list-sdks` 中有 8.0 或更高版本的 SDK；不满足时停下来告诉我缺什么，不要自行安装。
+2. 运行 `codex plugin marketplace add ayueryi/wpf-offscreen-render`（提示已存在时跳过），再运行 `codex plugin add wpf-offscreen-render@wpf-offscreen-render`，输出中的 “Installed plugin root” 就是插件目录。这些命令需要联网，被沙箱拦截时请求我批准。
+3. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<插件目录>\mcp\start.ps1" -BuildOnly` 预编译 MCP 服务器（首次需要访问 NuGet，可能要一分钟左右）。
+4. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<插件目录>\tests\run-tests.ps1" -Quick`，确认输出 `2 通过，0 失败`。
+5. 告诉我安装的版本、插件目录和自检结果，并提醒我重启 Codex 会话。
+```
+
+</details>
+
+<details>
+<summary><b>Codex：更新</b></summary>
+
+```text
+请把 wpf-offscreen-render 插件更新到最新版本：
+1. 先用 `codex plugin list` 记下当前版本，然后运行 `codex plugin marketplace upgrade wpf-offscreen-render` 刷新插件市场，再运行 `codex plugin add wpf-offscreen-render@wpf-offscreen-render` 安装新版本（只刷新市场不会更新已安装的插件）。这些命令需要联网，被沙箱拦截时请求我批准。
+2. 版本有变化时，对输出中新的 “Installed plugin root” 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<插件目录>\mcp\start.ps1" -BuildOnly` 预编译 MCP 服务器，再运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<插件目录>\tests\run-tests.ps1" -Quick` 自检（应输出 `2 通过，0 失败`）。
+3. 告诉我更新前后的版本号，根据 `<插件目录>\CHANGELOG.md` 概括这之间的变化，并提醒我重启 Codex 会话。
+```
+
+</details>
+
+<details>
+<summary><b>其他代理：克隆安装与更新</b></summary>
+
+```text
+请帮我接入 wpf-offscreen-render（WPF 离屏渲染工具，仓库 https://github.com/ayueryi/wpf-offscreen-render）：
+1. 确认本机是 Windows，`pwsh -v` 为 7.x，`dotnet --list-sdks` 中有 8.0 或更高版本的 SDK；不满足时停下来告诉我。
+2. 若 `%USERPROFILE%\tools\wpf-offscreen-render` 不存在，把仓库克隆到那里；已存在时在该目录运行 `git pull --ff-only` 更新（有本地改动时停下来问我）。
+3. 在你的 MCP 配置中登记服务器 wpf-offscreen-render：command 为 `pwsh`，args 为 `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File <仓库目录>\mcp\start.ps1`；你支持 skills 时，把 `<仓库目录>\skills\wpf-offscreen-render` 复制到你的 skills 目录（更新时覆盖），并在复制后的 SKILL.md 开头注明“插件根目录为 <仓库目录>”（其中引用的 references、scripts 都在仓库里）。
+4. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<仓库目录>\mcp\start.ps1" -BuildOnly` 预编译，再运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<仓库目录>\tests\run-tests.ps1" -Quick` 自检（应输出 `2 通过，0 失败`）。
+5. 告诉我版本（`<仓库目录>\VERSION`）和自检结果，并说明需要重启会话。
+```
+
+</details>
 
 ### Claude Code
 
@@ -47,15 +118,16 @@
 /plugin install wpf-offscreen-render@wpf-offscreen-render
 ```
 
-Claude Code 2.1.275 及以上也可以一步安装：`/plugin install wpf-offscreen-render --marketplace ayueryi/wpf-offscreen-render`。插件包含 skill、MCP 服务器和[结束前自动验证](#接入业务项目)的 Stop hook。
+Claude Code 2.1.275 及以上也可以一步安装：`/plugin install wpf-offscreen-render --marketplace ayueryi/wpf-offscreen-render`。插件包含 skill、MCP 服务器和[结束前自动验证](#接入业务项目)的 Stop hook。在终端中可以用对应的 CLI：`claude plugin marketplace add …`、`claude plugin install …`；更新用 `claude plugin marketplace update wpf-offscreen-render` 加 `claude plugin update wpf-offscreen-render@wpf-offscreen-render`，重启会话后生效。
 
 ### Codex
 
 ```text
 codex plugin marketplace add ayueryi/wpf-offscreen-render
+codex plugin add wpf-offscreen-render@wpf-offscreen-render
 ```
 
-然后在 Codex 的插件列表中安装 `wpf-offscreen-render`。
+也可以在 Codex 的插件列表中安装。更新：`codex plugin marketplace upgrade wpf-offscreen-render` 刷新市场后，再运行一次 `codex plugin add wpf-offscreen-render@wpf-offscreen-render`（只刷新市场不会更新已安装的插件），重启会话后生效。
 
 ### Antigravity
 
@@ -108,7 +180,7 @@ pwsh -File .\scripts\install-antigravity.ps1 -Test
 }
 ```
 
-Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\tools\wpf-offscreen-render\mcp\start.ps1`。需要工作流说明时，再把 `skills\wpf-offscreen-render` 复制到代理的 skills 目录（Claude Code：`.claude\skills\`；Codex / Antigravity：`.agents\skills\`）。
+Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\tools\wpf-offscreen-render\mcp\start.ps1`。需要工作流说明时，再把 `skills\wpf-offscreen-render` 复制到代理的 skills 目录（Claude Code：`.claude\skills\`；Codex / Antigravity：`.agents\skills\`）；复制后 SKILL.md 中指向 `references/`、`scripts/` 的相对路径不再成立，需要在其开头注明仓库所在目录。
 
 ### 验证安装
 
@@ -118,7 +190,7 @@ Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh
 
 | MCP 工具 | 用途 |
 | --- | --- |
-| `render_view` | 渲染一个视图（或预设），返回 JSON 摘要和截图；传 `element` 时另附该元素的截图 |
+| `render_view` | 渲染一个视图（或预设），返回 JSON 摘要和截图；传 `element` 时另附该元素的截图；传 `steps` 时依次执行交互步骤，返回每步摘要和步骤总览图 |
 | `render_matrix` | 一次渲染多个主题 × 尺寸 × DPI，返回汇总和总览图 |
 | `compare_snapshots` | 对比两次渲染，返回变化区域和差异图（变化像素标红） |
 | `get_layout` | 按元素名、文本或问题类型查询某次渲染的布局树 |
@@ -147,7 +219,7 @@ Codex 不装插件时也可以执行 `codex mcp add wpf-offscreen-render -- pwsh
 }
 ```
 
-`status` 为 `ok` / `binding-issues` / `failed:<阶段>`。布局问题只是线索，不影响 `status`，由代理对照截图确认。完整字段见 [references/cli.md](references/cli.md)。
+`status` 为 `ok` / `binding-issues` / `failed:<阶段>`（多组合渲染的汇总为 `ok` / `binding-issues` / `failed`）。布局问题只是线索，不影响 `status`，由代理对照截图确认。完整字段见 [references/cli.md](references/cli.md)。
 
 ## 接入业务项目
 
@@ -255,6 +327,7 @@ flowchart LR
 | [SKILL.md](skills/wpf-offscreen-render/SKILL.md) | 代理工作流：何时用、怎么调用、如何读结果与报告 |
 | [references/cli.md](references/cli.md) | 全部脚本参数、渲染模式、输出文件与字段、退出码、尺寸与 DPI |
 | [references/integration.md](references/integration.md) | 接入业务界面：`wpf-render.json`、程序集与框架推断、DataContext 与 `ViewFactory.cs`、资源与主题、异步就绪 |
+| [references/steps.md](references/steps.md) | 交互步骤与动画取帧：动作类型、元素定位、等待、结果与限制 |
 | [references/verification.md](references/verification.md) | 产物验收、布局检查解读、视觉基线比较、故障定位、已知限制、性能验证边界 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本记录 |
 

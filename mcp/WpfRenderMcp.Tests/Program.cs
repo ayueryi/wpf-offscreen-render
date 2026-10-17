@@ -51,7 +51,8 @@ Check("get_layout 缺少目录时报错", missing.IsError == true && Texts(missi
 var presetDir = Directory.CreateTempSubdirectory("wpf-render-preset-").FullName;
 File.WriteAllText(Path.Combine(presetDir, "wpf-render.json"), """
     { "verifyOnStop": true,
-      "defaults": { "assemblyPaths": ["bin/App.dll"], "themes": ["light", "dark"] },
+      // 注释与尾逗号：与脚本使用的 ConvertFrom-Json 一样可以解析
+      "defaults": { "assemblyPaths": ["bin/App.dll"], "themes": ["light", "dark"], },
       "views": { "Order": { "viewType": "App.OrderView", "watch": ["src/Order/**"] }, "Login": { "xaml": "probe.xaml" } } }
     """);
 var views = Json(await Call("list_views", new() { ["config"] = presetDir }));
@@ -84,6 +85,16 @@ else
         var layout = Json(await Call("get_layout", new() { ["outDir"] = outDir, ["element"] = "ClippedButton", ["kind"] = "overlap" }));
         Check("get_layout 按元素与类型筛选", layout?["issueCount"]?.GetValue<int>() == 1 && (layout?["matchedNodes"] as JsonArray)?.Count > 0, layout?.ToJsonString() ?? "");
 
+        // 交互步骤：steps 参数按 JSON 数组传入，返回每步摘要与步骤总览图。
+        var stepsResult = await Call("render_view", new()
+        {
+            ["assemblyPaths"] = new[] { sample }, ["viewType"] = "SampleViews.InteractionView",
+            ["steps"] = JsonNode.Parse("""[{ "name": "expand", "set": { "element": "DetailsExpander", "property": "IsExpanded", "value": true } }]"""),
+        });
+        var stepsSummary = Json(stepsResult);
+        Check("render_view 交互步骤：每步摘要与总览图", stepsResult.IsError != true && (stepsSummary?["steps"] as JsonArray)?.Count == 1
+            && stepsSummary?["steps"]?[0]?["status"]?.GetValue<string>() == "ok" && Images(stepsResult) == 2, Texts(stepsResult));
+
         var broken = await Call("render_view", new()
         {
             ["assemblyPaths"] = new[] { sample }, ["viewType"] = "SampleViews.BrokenBindingView", ["dataContextType"] = "SampleViews.OrderPreviewVm",
@@ -107,6 +118,22 @@ else
 
     var selfTest = await Call("self_test", new());
     Check("self_test 通过", selfTest.IsError != true && Texts(selfTest).Contains("0 失败"), Texts(selfTest));
+}
+
+// Codex 的启动方式：codex.mcp.json 中的相对脚本路径 + 以插件目录为工作目录。此时相对路径参数应明确报错。
+var codexServer = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "codex.mcp.json")))!["mcpServers"]!["wpf-offscreen-render"]!;
+await using (var codexClient = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
+{
+    Name = "wpf-offscreen-render-codex",
+    Command = codexServer["command"]!.GetValue<string>(),
+    Arguments = codexServer["args"]!.AsArray().Select(arg => arg!.GetValue<string>()).ToList(),
+    WorkingDirectory = Path.GetFullPath(Path.Combine(root, codexServer["cwd"]!.GetValue<string>())),
+})))
+{
+    var codexTools = await codexClient.ListToolsAsync();
+    Check("Codex 启动方式：tools/list", codexTools.Count == 6, string.Join(",", codexTools.Select(tool => tool.Name)));
+    var relative = await codexClient.CallToolAsync("list_views", new Dictionary<string, object?> { ["config"] = "." });
+    Check("Codex 启动方式：相对路径明确报错", relative.IsError == true && Texts(relative).Contains("绝对路径"), Texts(relative));
 }
 
 Console.WriteLine($"{passed} 通过，{failures.Count} 失败");

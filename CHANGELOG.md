@@ -2,7 +2,7 @@
 
 版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
 
-## 1.1.2 – 2026-10-15
+## 1.3.0 – 2026-10-17
 
 支持 Google Antigravity 原生安装与插件集成。
 
@@ -14,6 +14,61 @@
 
 ### 检查
 - `tests/validate-plugins.ps1` 扩展对 Antigravity 清单、MCP 配置和模板路径的完整性与跨清单一致性校验。
+
+## 1.2.0 – 2026-10-11
+
+### 新增：交互步骤与动画取帧
+- 在初始截图之后按顺序执行动作，每步截图并做绑定与布局检查：`set`（控件属性）、`setData`（ViewModel 数据）、`invoke`（经 UI 自动化点击按钮 / 切换 / 展开 / 选中）、`command`、`state`（VisualState，如 MouseOver）、`focus`、`animate`（Storyboard 按时刻取帧，结果可复现）、`custom`（业务 `ViewFactory.RunStepAsync`，可选实现，不影响现有工厂编译）。
+- 元素可按 `x:Name`、`AutomationId`、类型、显示文本与序号定位；`waitFor` 支持等待属性 / 数据达到指定值或 `ViewFactory.WaitUntilReadyAsync`。
+- 每步给出相对上一张截图的变化区域、新增的绑定错误（标明首次出现的步骤）与布局问题；全部截图拼成 `steps-overview.png`。
+- 动作打开的 WPF 对话框移到屏外、截图后关闭，业务代码随后继续执行；`MessageBox` 记录标题与文字后关闭。
+- 入口：MCP `render_view` 的 `steps` / `continueOnError` / `animations` / `includeStepImages`，`wpf-render.json` 预设的 `steps`，`render.ps1` / `new-wpf-harness.ps1` 的 `-Steps`。步骤不能与多主题 / 尺寸 / DPI 同时使用。
+- 新状态 `failed:step`（退出码 3）。文档：[references/steps.md](references/steps.md)，设计：[docs/design/interaction-steps.md](docs/design/interaction-steps.md)。
+- 限制：WPF 默认主题的悬停 / 按下由只读的 `IsMouseOver` / `IsPressed` 触发器实现，离屏无法模拟，`state` 步骤会明确报错；拖拽、手势与真实输入序列不在范围内。
+
+### 检查
+- 新增 `InteractionView` 样例与 5 组用例：窗口模式完整流程（net8 / net472）、默认模式取帧可复现、失败与 `continueOnError`、`custom` 步骤；预设 `steps` 与多主题冲突；MCP `render_view` 的 `steps`。
+
+## 1.1.3 – 2026-10-10
+
+第四轮全量 review 的修复。
+
+### 修复
+- **只装了 .NET 9 / 10 的机器**：MCP 服务器（面向 net8.0）与 .NET 宿主设置 `RollForward=Major`，原先因缺少 .NET 8 运行时无法启动。
+- **Codex**：插件配置设置启动 / 工具调用超时（180 秒 / 30 分钟，原先使用 Codex 默认的 10 秒 / 60 秒，首次渲染与自检经常超时）。Codex 以插件目录为工作目录启动服务器，相对路径会指向插件内部：此时工具对相对路径与缺少 `config` 的 `preset` 明确报错。更正 1.1.2 中“各工具相对路径含义一致”的说法，它只在以项目目录启动服务器的客户端（如 Claude Code）中成立。
+- **窗口模式**：结果全部写出后才执行业务清理，并且不再关闭窗口或调用 `Application.Shutdown`，业务窗口 `Closing` 中的确认对话框不会再卡住渲染、丢失结果；窗口显示后再强制一次屏外位置与普通状态（业务窗口常在 `Loaded` 中恢复最大化）；RightToLeft 的业务 Window 在摘要中给出 `warning`。
+- 业务代码启动的子进程占用输出管道时，读取宿主输出最多等待 5 秒，不再无限等待。
+- MCP 服务器编译截断上层目录的 `Directory.Build.*` / `Directory.Packages.props`（集中包管理会让编译失败）；安装路径含 `\bin\` / `\obj\` 时不再过滤掉全部源码。
+- 预设中视图的设置按组覆盖 `defaults`（视图写 `xaml` 时不继承 `viewType`，写 `width` / `height` 时不继承 `sizes`）；`list_views` 同样处理。
+- `trust-project.ps1 -Revoke` 在配置已删除的目录中运行时撤销该目录的记录，不再误撤销父目录的配置。
+- 其余：找不到 `dotnet` 时也写出摘要；资源字典与预设路径只把 `pack://`、`file://`、`http(s)://` 视为 URI（自定义 PowerShell 驱动器路径可用）；构建命令为 `.ps1` 时不沿用上一次的退出码；工作区一侧的重命名同样计入新旧路径；授权提示按配置与授权状态分别提示；截断检查比较 Run 的实际字体（含样式设置）并考虑 `LineHeight`；README 提示词统一用 `pwsh -File` 运行脚本。
+
+### 检查
+- MCP 测试新增 Codex 启动方式（`codex.mcp.json` 的相对脚本路径与工作目录）；CI 新增只装 .NET 10 的 MCP 测试。
+- 测试补强：hook 测试同时断言退出码；`-Xaml` 覆盖断言实际渲染的视图类型；新增视图 `xaml` 覆盖 `defaults.viewType`、十六进制名称但无标记文件的目录不被清理。
+
+## 1.1.2 – 2026-10-10
+
+第三轮全量 review 的修复。
+
+### 修复
+- **SDK 隔离**：`dotnet` 按当前目录（而不是工程目录）查找 `global.json`，1.1.1 写入宿主的空 `global.json` 在从业务仓库目录调用时并不生效。宿主与 MCP 服务器现在都在各自目录内构建，业务仓库锁定的 SDK 不再影响它们。
+- **缓存清理**：原先会删除 `-CacheRoot` 下所有超过保留期的子目录；现在只处理本工具创建的缓存目录。
+- **Stop hook 编码**：hook 的输入、git 输出与 hook 输出统一按 UTF-8 处理（原先使用控制台代码页，中文 Windows 上中文路径的项目找不到配置、中文文件名匹配不到 `watch`、拦截原因变成乱码）；输出 JSON 的非 ASCII 字符转义。
+- **布局坐标**：`layout.json`、`elementRectDip` 改用截图坐标，计入根元素自身的 Margin / 对齐偏移（固定尺寸的视图居中时原先整体偏差），`out-of-viewport` 不再漏报。
+- 业务代码留下的前台线程不再让已完成的渲染因进程无法退出而判为 `failed:timeout`。
+- 预设与显式参数按组覆盖：显式 `-Xaml` 取消预设的 `viewType`（原先报“只能二选一”），显式 `-Width` / `-Height` 取消预设的 `sizes`（原先被静默忽略）。
+- `-Element` 元素截图超过 6000 万像素时不再让整次渲染失败，原因写入 `elementError`。
+- 渲染进程无法启动时（AppLocker 拦截、找不到 `dotnet`）也写出 `summary.json`，状态为 `failed:start`；宿主崩溃且没有 `error.txt` 时，`error` 取 stderr 末尾。
+- MCP 启动器：首次编译使用一次性目录、成功后改名，客户端启动超时后重试不会与遗留的编译冲突；新增 `-BuildOnly` 预热；不再用 `Start-Process -Wait`（会等待 MSBuild 节点等子孙进程，服务器退出后启动器不退出）；源码哈希按统一换行计算，离线拷贝的缓存可复用。
+- MCP 服务器不再读取用户项目目录中的 `appsettings*.json`（格式错误时启动即崩溃）；脚本在服务器的工作目录中运行，相对路径与向上查找 `wpf-render.json` 在各工具中含义一致；`list_views` 容忍注释与尾逗号。
+- `-WindowHost` 重置业务窗口的 `WindowState`，最大化的窗口不再出现在真实屏幕上。
+- `watch` 中的 `**` 可匹配零层目录；重命名时新旧路径都算改动。
+- 程序集 TFM 或位数变化（路径不变）时重新生成缓存宿主；组合为空时报错；`-NoBuild` 找不到产物后缓存能自行恢复。
+- 相对路径按 PowerShell 当前位置解析，UNC 路径可用；`trust-project.ps1 -Revoke` 可撤销已删除配置的授权；`Run` 自带字体的文本不再做截断检查（原先误报）；资源字典可用相对路径。
+
+### 检查
+- 新增用例：固定尺寸视图居中时的元素坐标、上层目录锁定未安装 SDK 时的构建、中文目录中的 Stop hook、预设的按组覆盖、缓存根目录中的无关目录不被删除。
 
 ## 1.1.1 – 2026-10-10
 
