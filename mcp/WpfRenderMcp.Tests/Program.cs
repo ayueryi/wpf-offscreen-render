@@ -105,7 +105,8 @@ else
 
     var matrix = await Call("render_matrix", new() { ["themes"] = new[] { "light", "dark" }, ["sizes"] = new[] { "640x360" } });
     var matrixJson = Json(matrix);
-    Check("render_matrix：两个组合与总览图", matrix.IsError != true && matrixJson?["rendered"]?.GetValue<int>() == 2 && Images(matrix) == 1, Texts(matrix));
+    Check("render_matrix：两个组合、绑定监听标记与总览图", matrix.IsError != true && matrixJson?["rendered"]?.GetValue<int>() == 2 && Images(matrix) == 1
+        && (matrixJson?["results"] as JsonArray)?.All(x => x?["bindingTraceVerified"]?.GetValue<bool>() == true) == true, Texts(matrix));
 
     var results = matrixJson?["results"] as JsonArray;
     if (results is { Count: 2 })

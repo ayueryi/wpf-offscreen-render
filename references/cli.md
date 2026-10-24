@@ -63,7 +63,7 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `matrix.json` | `status`（`ok` / `binding-issues` / `failed`）、`combinations`、`rendered`、`overview`，以及每个组合的 `theme` / `size` / `dpi` / `status` / `snapshot` / 绑定与布局问题 / `outDir` |
+| `matrix.json` | `status`（`ok` / `binding-issues` / `failed`）、`combinations`、`rendered`、`overview`，以及每个组合的 `theme` / `size` / `dpi` / `status` / `bindingTraceVerified` / `snapshot` / 绑定与布局问题 / `outDir` |
 | `overview.png` | 全部截图缩放到 480 像素宽后拼成的总览图，每张标注主题、尺寸、DPI 与状态，一次查看即可对比 |
 
 多组合的退出码取最严重者：任一组合失败为 `1`，否则任一绑定问题为 `2`，否则 `0`。构建失败时不再渲染其余组合。

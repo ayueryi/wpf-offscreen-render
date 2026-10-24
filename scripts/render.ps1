@@ -168,6 +168,7 @@ function Invoke-Combos([string]$HarnessDir, [bool]$SkipBuild) {
         $summary = Get-Content -LiteralPath (Join-Path "$out" 'summary.json') -Raw | ConvertFrom-Json
         [pscustomobject]@{
             theme = $c.Theme; size = "$($c.Width)x$($c.Height)"; dpi = $c.Dpi; status = $summary.status; exitCode = $code
+            bindingTraceVerified = $summary.bindingTraceVerified
             snapshot = $summary.snapshot; bindingIssueCount = $summary.bindingIssueCount; layoutIssueCount = $summary.layoutIssueCount
             bindingIssues = $summary.bindingIssues; layoutIssues = $summary.layoutIssues; error = $summary.error; buildErrors = $summary.buildErrors; outDir = "$out"
         }

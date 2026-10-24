@@ -167,6 +167,7 @@ function Test-Matrix($case) {
     $matrix = Get-Content -LiteralPath $matrixPath -Raw | ConvertFrom-Json
     if ($exitCode -ne 0 -or $matrix.status -ne 'ok') { $failures.Add("期望 ok / 0，实际 $($matrix.status) / $exitCode") }
     if ($matrix.rendered -ne 4) { $failures.Add("期望渲染 4 个组合，实际 $($matrix.rendered)") }
+    if (@($matrix.results | Where-Object { $_.bindingTraceVerified -ne $true }).Count -ne 0) { $failures.Add('矩阵结果缺少可信的绑定监听标记') }
     if (-not $matrix.overview -or -not (Test-Path -LiteralPath $matrix.overview)) { $failures.Add('缺少 overview.png') }
     $built = @($matrix.results | Where-Object { Test-Path -LiteralPath (Join-Path $_.outDir 'build.log') })
     if ($built.Count -ne 1) { $failures.Add("期望只构建一次，实际 $($built.Count) 次") }
