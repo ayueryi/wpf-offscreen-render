@@ -2,6 +2,20 @@
 
 版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
 
+## 1.3.1 – 2026-10-24
+
+优化 WPF 离屏渲染 Skill 的工具路由、仓库根解析、产物生命周期和矩阵结果契约。
+
+### 修复与改进
+- Skill 不再依赖机器相关的仓库绝对路径，明确 `WPF_RENDER_ROOT`、插件祖先目录和 MCP / 脚本路由。
+- 区分 `render_view` 与 `render_matrix` 的能力边界，补充 `windowHost` 桌面会话、退出码和临时产物清理规则。
+- 矩阵结果为每个组合返回 `bindingTraceVerified`，并加入回归断言。
+- 更新 README、CLI 参考和完整验证流程。
+
+### 检查
+- 完整回归：37 通过，0 失败。
+- 快速自检：2 通过，0 失败。
+
 ## 1.3.0 – 2026-10-17
 
 支持 Google Antigravity 原生安装与插件集成。

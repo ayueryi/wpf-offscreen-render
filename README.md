@@ -1,7 +1,7 @@
 # WPF Offscreen Render
 
 [![CI](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml/badge.svg)](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-1.3.0-blue)
+![version](https://img.shields.io/badge/version-1.3.1-blue)
 ![.NET](https://img.shields.io/badge/WPF-.NET%20Framework%204.7.2%20%E2%80%93%20.NET%2010-512BD4)
 
 让 AI 编码代理（Antigravity、Codex、Claude Code 等）**亲眼看到**自己改出来的 WPF 界面：在独立的临时进程里把真实的 `UserControl` / `Page` / `Window` 渲染成 PNG，并给出解析好的绑定错误和布局问题。
