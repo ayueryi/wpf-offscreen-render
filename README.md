@@ -104,7 +104,7 @@
 请帮我接入 wpf-offscreen-render（WPF 离屏渲染工具，仓库 https://github.com/ayueryi/wpf-offscreen-render）：
 1. 确认本机是 Windows，`pwsh -v` 为 7.x，`dotnet --list-sdks` 中有 8.0 或更高版本的 SDK；不满足时停下来告诉我。
 2. 若 `%USERPROFILE%\tools\wpf-offscreen-render` 不存在，把仓库克隆到那里；已存在时在该目录运行 `git pull --ff-only` 更新（有本地改动时停下来问我）。
-3. 在你的 MCP 配置中登记服务器 wpf-offscreen-render：command 为 `pwsh`，args 为 `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File <仓库目录>\mcp\start.ps1`；你支持 skills 时，把 `<仓库目录>\skills\wpf-offscreen-render` 复制到你的 skills 目录（更新时覆盖），并在复制后的 SKILL.md 开头注明“插件根目录为 <仓库目录>”（其中引用的 references、scripts 都在仓库里）。
+3. 在你的 MCP 配置中登记服务器 wpf-offscreen-render：command 为 `pwsh`，args 为 `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File <仓库目录>\mcp\start.ps1`；你支持 skills 时，把 `<仓库目录>\skills\wpf-offscreen-render` 复制到你的 skills 目录（更新时覆盖），并在复制后的 SKILL.md「仓库根」一节第 2 条填入 `仓库根：<仓库目录>`（绝对路径；其中引用的 references、scripts 都相对该目录，禁止按 SKILL.md 上两级推断）。
 4. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<仓库目录>\mcp\start.ps1" -BuildOnly` 预编译，再运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File "<仓库目录>\tests\run-tests.ps1" -Quick` 自检（应输出 `2 通过，0 失败`）。
 5. 告诉我版本（`<仓库目录>\VERSION`）和自检结果，并说明需要重启会话。
 ```
