@@ -5,6 +5,8 @@ description: 在独立临时进程中把真实 WPF UserControl、Page、Window �
 
 # WPF 离屏渲染
 
+**给 AI 一双看 WPF 的眼睛。**
+
 在独立临时进程中创建 WPF Visual，通过 `RenderTargetBitmap` 输出 PNG；使用真实控件、真实样式和确定的样例数据，不启动业务程序。渲染需要 Windows；`windowHost` 还需要交互式桌面会话。
 
 ## 仓库根

@@ -1,7 +1,7 @@
 {
   "name": "wpf-offscreen-render",
   "version": "1.3.1",
-  "description": "离屏渲染真实 WPF / XAML 界面为 PNG，返回截图、绑定错误与布局问题，支持前后对比与多主题 / 尺寸 / DPI 组合（需要 Windows）。",
+  "description": "给 AI 一双看 WPF 的眼睛：离屏渲染真实 WPF / XAML 界面为 PNG，返回截图、绑定错误与布局问题，支持前后对比与多主题 / 尺寸 / DPI 组合（需要 Windows）。",
   "author": { "name": "ayueryi", "url": "https://github.com/ayueryi" },
   "homepage": "https://github.com/ayueryi/wpf-offscreen-render",
   "repository": "https://github.com/ayueryi/wpf-offscreen-render",
