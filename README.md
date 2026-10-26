@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/logo.png" alt="WPF Offscreen Render" width="104">
+</p>
+
 # WPF Offscreen Render
 
 **给 AI 一双看 WPF 的眼睛**<br>
