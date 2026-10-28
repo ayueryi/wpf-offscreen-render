@@ -86,6 +86,7 @@ $cases = @(
     @{ Name = 'result-reader'; Kind = 'ResultReader' }
     @{ Name = 'watch-matcher'; Kind = 'WatchMatcher' }
     @{ Name = 'antigravity-install'; Kind = 'AntigravityInstall' }
+    @{ Name = 'host-frameworks'; Kind = 'HostFrameworks' }
     @{ Name = 'steps-net8'; Kind = 'Steps'; Sample = 'net8' }
     @{ Name = 'steps-net472'; Kind = 'Steps'; Sample = 'net472' }
     @{ Name = 'steps-layout-only'; Kind = 'StepsLayoutOnly' }
@@ -567,6 +568,60 @@ function Test-AntigravityInstall($case) {
     Set-Content -LiteralPath (Join-Path $target 'stale.txt') -Value 'x'
     Mount-Skill $target $source | Out-Null
     if (Test-Path -LiteralPath (Join-Path $target 'stale.txt')) { $failures.Add('重复挂载应清理旧副本') }
+    $failures
+}
+
+# HostFrameworks.ps1（宿主 TFM / 位数推断）：fixtures 三变体直测，不必起渲染；错误分支与回落规则一并覆盖。
+function Test-HostFrameworks($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    . (Join-Path $root 'scripts\HostFrameworks.ps1')
+    # -Quick 不构建 fixtures；这里按需自建三种变体（与用例主体共用同一产物目录）。
+    if (-not $samples['net472']) {
+        foreach ($variant in @(
+                @{ Name = 'net472'; Args = @('-f', 'net472') },
+                @{ Name = 'net472-x86'; Args = @('-f', 'net472', '-p:PlatformTarget=x86') },
+                @{ Name = 'net8'; Args = @('-f', 'net8.0-windows') })) {
+            $out = Join-Path $ArtifactsDir "fixtures\$($variant.Name)"
+            $log = Join-Path $ArtifactsDir "fixtures-$($variant.Name).log"
+            & dotnet build $sampleProject -c Release --nologo --no-incremental -o $out @($variant.Args) *> $log
+            if ($LASTEXITCODE -ne 0) { Get-Content -LiteralPath $log -Tail 30; $failures.Add("样例程序集构建失败：$($variant.Name)"); continue }
+            $samples[$variant.Name] = Join-Path $out 'SampleViews.dll'
+        }
+        if ($failures.Count -gt 0) { return $failures }
+    }
+    # 表：程序集变体 → 期望 TFM / 位数。
+    $table = @(
+        @{ Sample = 'net472'; ExpectTfm = 'net472'; ExpectPlatform = 'AnyCPU' }
+        @{ Sample = 'net472-x86'; ExpectTfm = 'net472'; ExpectPlatform = 'x86' }
+        @{ Sample = 'net8'; ExpectTfm = 'net8.0-windows'; ExpectPlatform = 'AnyCPU' }
+    )
+    foreach ($row in $table) {
+        $actual = Get-HostFrameworks $samples[$row.Sample] $null $null
+        if ($actual.TargetFramework -ne $row.ExpectTfm -or $actual.Platform -ne $row.ExpectPlatform) {
+            $failures.Add("$($row.Sample)：期望 $($row.ExpectTfm) / $($row.ExpectPlatform)，实际 $($actual.TargetFramework) / $($actual.Platform)")
+        }
+    }
+    # 显式参数可引用时采用；不可引用（版本不足 / 位数不符）时报错。
+    $chosen = Get-HostFrameworks $samples['net472'] 'net48' 'x86'
+    if ($chosen.TargetFramework -ne 'net48') { $failures.Add("显式 -TargetFramework net48 应采用：$($chosen.TargetFramework)") }
+    foreach ($bad in @(@{ Tfm = 'net6.0-windows'; Platform = $null; Expect = '不能引用面向' }, @{ Tfm = $null; Platform = 'x64'; Expect = '不一致' })) {
+        try {
+            $null = Get-HostFrameworks $samples['net472-x86'] $bad.Tfm $bad.Platform
+            $failures.Add("net472-x86 + Tfm=$($bad.Tfm) Platform=$($bad.Platform) 应报错")
+        } catch {
+            if ($_.Exception.Message -notlike "*$($bad.Expect)*") { $failures.Add("报错信息不明确：$($_.Exception.Message)") }
+        }
+    }
+    # Framework 与 .NET 不得混载。
+    try {
+        $null = Get-HostFrameworks @($samples['net472'], $samples['net8']) $null $null
+        $failures.Add('Framework 与 .NET 程序集混载应报错')
+    } catch {
+        if ($_.Exception.Message -notlike '*不能在同一宿主中加载*') { $failures.Add("混载报错不明确：$($_.Exception.Message)") }
+    }
+    # 无业务程序集时默认 net8.0-windows（内置样例路径）。
+    $default = Get-HostFrameworks @() $null $null
+    if ($default.TargetFramework -ne 'net8.0-windows' -or $default.Platform -ne 'AnyCPU') { $failures.Add("无程序集应默认 net8.0-windows / AnyCPU：$($default.TargetFramework) / $($default.Platform)") }
     $failures
 }
 
