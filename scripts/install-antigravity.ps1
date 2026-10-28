@@ -65,44 +65,24 @@ $globalSkillTarget = Join-Path $globalSkillsDir 'wpf-offscreen-render'
 $sourceSkillDir = Join-Path $root 'skills\wpf-offscreen-render'
 $startScriptPath = (Join-Path $root 'mcp\start.ps1') -replace '\\', '/'
 
-function Remove-ConfigPath([string]$Path) {
-    if (Test-Path -LiteralPath $Path) {
-        $item = Get-Item -LiteralPath $Path -Force
-        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-            $item.Delete()
-        } else {
-            Remove-Item -LiteralPath $Path -Recurse -Force
-        }
-    }
-}
+# 安装 / 卸载的配置读写与 skill 挂载逻辑在 AntigravityInstall.ps1（安装与卸载共用，测试直测这两个 module）。
+. (Join-Path $PSScriptRoot 'AntigravityInstall.ps1')
 
 if ($Uninstall) {
     Write-Host "正在从 Antigravity 卸载 wpf-offscreen-render ..." -ForegroundColor Cyan
 
-    if (Test-Path -LiteralPath $globalMcpConfig) {
-        try {
-            $jsonText = Get-Content -LiteralPath $globalMcpConfig -Raw
-            $mcpConfig = if ($jsonText.Trim()) { $jsonText | ConvertFrom-Json -AsHashtable } else { @{} }
-            if ($mcpConfig.mcpServers -and $mcpConfig.mcpServers.ContainsKey('wpf-offscreen-render')) {
-                $null = $mcpConfig.mcpServers.Remove('wpf-offscreen-render')
-                $updatedJson = $mcpConfig | ConvertTo-Json -Depth 10
-                [IO.File]::WriteAllText($globalMcpConfig, $updatedJson + "`n", [Text.Encoding]::UTF8)
-                Write-Host "已从 $globalMcpConfig 移除 wpf-offscreen-render MCP 服务器配置。" -ForegroundColor Green
-            }
-        } catch {
-            Write-Warning "读取或更新 $globalMcpConfig 失败：$($_.Exception.Message)"
-        }
-    }
+    Set-McpServerEntry $globalMcpConfig $false $startScriptPath
+    Write-Host "已从 $globalMcpConfig 移除 wpf-offscreen-render MCP 服务器配置。" -ForegroundColor Green
 
     if (Test-Path -LiteralPath $globalSkillTarget) {
-        Remove-ConfigPath $globalSkillTarget
+        Unmount-Skill $globalSkillTarget
         Write-Host "已移除全局 Skill 链接：$globalSkillTarget" -ForegroundColor Green
     }
 
     if ($WorkspacePath) {
         $wsSkillTarget = Join-Path $WorkspacePath '.agents\skills\wpf-offscreen-render'
         if (Test-Path -LiteralPath $wsSkillTarget) {
-            Remove-ConfigPath $wsSkillTarget
+            Unmount-Skill $wsSkillTarget
             Write-Host "已移除工作区 Skill 链接：$wsSkillTarget" -ForegroundColor Green
         }
     }
@@ -126,56 +106,13 @@ Write-Host "检测到 .NET SDK: $dotnetVersion" -ForegroundColor Gray
 if ($Scope -eq 'Global') {
     Write-Host "正在为 Antigravity 配置全局 MCP 服务器与 Skill ..." -ForegroundColor Cyan
 
-    if (-not (Test-Path -LiteralPath $geminiConfigDir)) {
-        $null = New-Item -ItemType Directory -Path $geminiConfigDir -Force
-    }
-
     # 1. 配置全局 mcp_config.json
-    $mcpConfig = [ordered]@{}
-    if (Test-Path -LiteralPath $globalMcpConfig) {
-        try {
-            $raw = Get-Content -LiteralPath $globalMcpConfig -Raw
-            if ($raw.Trim()) {
-                $mcpConfig = $raw | ConvertFrom-Json -AsHashtable
-            }
-        } catch {
-            Write-Warning "原 $globalMcpConfig 解析失败，将创建备份并重新写入。"
-            Copy-Item -LiteralPath $globalMcpConfig -Destination "$globalMcpConfig.bak" -Force
-            $mcpConfig = [ordered]@{}
-        }
-    }
-    if (-not $mcpConfig.ContainsKey('mcpServers') -or -not ($mcpConfig.mcpServers -is [System.Collections.IDictionary])) {
-        $mcpConfig['mcpServers'] = [ordered]@{}
-    }
-
-    $mcpConfig['mcpServers']['wpf-offscreen-render'] = [ordered]@{
-        command = 'pwsh'
-        args = @(
-            '-NoProfile',
-            '-NonInteractive',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-File',
-            $startScriptPath
-        )
-    }
-
-    $updatedJson = $mcpConfig | ConvertTo-Json -Depth 10
-    [IO.File]::WriteAllText($globalMcpConfig, $updatedJson + "`n", [Text.Encoding]::UTF8)
+    Set-McpServerEntry $globalMcpConfig $true $startScriptPath
     Write-Host "已配置全局 MCP 服务器：$globalMcpConfig" -ForegroundColor Green
 
     # 2. 挂载全局 Skill
-    if (-not (Test-Path -LiteralPath $globalSkillsDir)) {
-        $null = New-Item -ItemType Directory -Path $globalSkillsDir -Force
-    }
-    Remove-ConfigPath $globalSkillTarget
-    try {
-        $null = New-Item -ItemType Junction -Path $globalSkillTarget -Target $sourceSkillDir -Force
-        Write-Host "已创建全局 Skill 联接：$globalSkillTarget -> $sourceSkillDir" -ForegroundColor Green
-    } catch {
-        Copy-Item -LiteralPath $sourceSkillDir -Destination $globalSkillTarget -Recurse -Force
-        Write-Host "已复制全局 Skill 目录：$globalSkillTarget" -ForegroundColor Green
-    }
+    $mode = Mount-Skill $globalSkillTarget $sourceSkillDir
+    Write-Host "已$(if ($mode -eq 'junction') { '创建全局 Skill 联接' } else { '复制全局 Skill 目录' })：$globalSkillTarget -> $sourceSkillDir" -ForegroundColor Green
 } else {
     $targetWs = if ($WorkspacePath) { $WorkspacePath } else { (Get-Location).Path }
     Write-Host "正在为工作区配置 Antigravity Skill：$targetWs ..." -ForegroundColor Cyan
@@ -183,17 +120,8 @@ if ($Scope -eq 'Global') {
     $wsSkillsDir = Join-Path $targetWs '.agents\skills'
     $wsSkillTarget = Join-Path $wsSkillsDir 'wpf-offscreen-render'
 
-    if (-not (Test-Path -LiteralPath $wsSkillsDir)) {
-        $null = New-Item -ItemType Directory -Path $wsSkillsDir -Force
-    }
-    Remove-ConfigPath $wsSkillTarget
-    try {
-        $null = New-Item -ItemType Junction -Path $wsSkillTarget -Target $sourceSkillDir -Force
-        Write-Host "已创建工作区 Skill 联接：$wsSkillTarget -> $sourceSkillDir" -ForegroundColor Green
-    } catch {
-        Copy-Item -LiteralPath $sourceSkillDir -Destination $wsSkillTarget -Recurse -Force
-        Write-Host "已复制工作区 Skill 目录：$wsSkillTarget" -ForegroundColor Green
-    }
+    $mode = Mount-Skill $wsSkillTarget $sourceSkillDir
+    Write-Host "已$(if ($mode -eq 'junction') { '创建工作区 Skill 联接' } else { '复制工作区 Skill 目录' })：$wsSkillTarget -> $sourceSkillDir" -ForegroundColor Green
 }
 
 if ($Test) {

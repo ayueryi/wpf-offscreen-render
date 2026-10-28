@@ -85,6 +85,7 @@ $cases = @(
     @{ Name = 'logic-tests'; Kind = 'LogicTests' }
     @{ Name = 'result-reader'; Kind = 'ResultReader' }
     @{ Name = 'watch-matcher'; Kind = 'WatchMatcher' }
+    @{ Name = 'antigravity-install'; Kind = 'AntigravityInstall' }
     @{ Name = 'steps-net8'; Kind = 'Steps'; Sample = 'net8' }
     @{ Name = 'steps-net472'; Kind = 'Steps'; Sample = 'net472' }
     @{ Name = 'steps-layout-only'; Kind = 'StepsLayoutOnly' }
@@ -516,6 +517,56 @@ function Test-WatchMatcher($case) {
     if (@($selection.Hits).Count -ne 2) { $failures.Add("Hits 应含两个命中文件：$(@($selection.Hits) -join ', ')") }
     $none = Select-AffectedViews $config $base @("$base/src/Other/b.xaml")
     if ($none.Views.Count -ne 0) { $failures.Add("无命中时应返回空视图列表：$($none.Views -join ', ')") }
+    $failures
+}
+
+# AntigravityInstall.ps1（安装 / 卸载的两个 module，直测不跑脚本）：安装与卸载严格互逆，
+# 保留用户其他条目，损坏配置备份后重建；skill 挂载 junction 与卸载。
+function Test-AntigravityInstall($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    . (Join-Path $root 'scripts\AntigravityInstall.ps1')
+    $dir = Join-Path $ArtifactsDir "$($case.Name)-config"
+    $null = New-Item -ItemType Directory -Path $dir
+    $configPath = Join-Path $dir 'mcp_config.json'
+
+    # 安装到空目录：创建配置与条目。
+    Set-McpServerEntry $configPath $true 'C:/plugin/mcp/start.ps1'
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable
+    if ($config.mcpServers['wpf-offscreen-render'].args[-1] -ne 'C:/plugin/mcp/start.ps1') {
+        $failures.Add("安装应写入指向 start.ps1 的条目：$($config | ConvertTo-Json -Compress -Depth 5)")
+    }
+
+    # 已有其他服务器条目：安装只增我们的键，卸载只删我们的键，其余保留。
+    $other = '{"mcpServers":{"other-server":{"command":"node","args":["s.js"]}}}'
+    Set-Content -LiteralPath $configPath -Value $other
+    Set-McpServerEntry $configPath $true 'C:/plugin/mcp/start.ps1'
+    Set-McpServerEntry $configPath $false 'C:/plugin/mcp/start.ps1'
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable
+    if ($config.mcpServers.Contains('wpf-offscreen-render')) { $failures.Add('卸载后不应残留我们的条目') }
+    if (-not $config.mcpServers.Contains('other-server')) { $failures.Add('卸载不应影响其他服务器条目') }
+
+    # 原配置损坏：备份为 .bak 后重建，不静默丢弃。
+    Set-Content -LiteralPath $configPath -Value '{broken json'
+    Set-McpServerEntry $configPath $true 'C:/plugin/mcp/start.ps1'
+    if (-not (Test-Path -LiteralPath "$configPath.bak")) { $failures.Add('损坏的配置应备份为 .bak') }
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable
+    if (-not $config.mcpServers.Contains('wpf-offscreen-render')) { $failures.Add('损坏后应重建为有效配置') }
+
+    # skill 挂载：NTFS 上得到 junction；卸载后目标消失、源目录不动。
+    $source = Join-Path $ArtifactsDir "$($case.Name)-skill-src"
+    $null = New-Item -ItemType Directory -Path $source
+    Set-Content -LiteralPath (Join-Path $source 'SKILL.md') -Value '# test'
+    $target = Join-Path $dir 'skills\wpf-offscreen-render'
+    $mode = Mount-Skill $target $source
+    if (-not (Test-Path -LiteralPath (Join-Path $target 'SKILL.md'))) { $failures.Add("挂载后目标应可读（mode=$mode）") }
+    Unmount-Skill $target
+    if (Test-Path -LiteralPath $target) { $failures.Add('卸载后目标应不存在') }
+    if (-not (Test-Path -LiteralPath (Join-Path $source 'SKILL.md'))) { $failures.Add('卸载不应影响源目录') }
+    # 目标已是普通目录（copy 回退的结果）时，重复挂载应先清掉旧副本。
+    $null = New-Item -ItemType Directory -Path $target
+    Set-Content -LiteralPath (Join-Path $target 'stale.txt') -Value 'x'
+    Mount-Skill $target $source | Out-Null
+    if (Test-Path -LiteralPath (Join-Path $target 'stale.txt')) { $failures.Add('重复挂载应清理旧副本') }
     $failures
 }
 
