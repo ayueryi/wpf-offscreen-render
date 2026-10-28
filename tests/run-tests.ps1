@@ -472,6 +472,12 @@ function Test-ResultReader($case) {
     if ($matrix.kind -ne 'matrix' -or @($matrix.items).Count -ne 2 -or $matrix.raw.overview -ne 'o.png') {
         $failures.Add("matrix 应展开 results：$($matrix | ConvertTo-Json -Compress -Depth 3)")
     }
+    # matrix 缺 results 键：items 应为空，而不是含一个 null（@($null) 的坑）。
+    $dir = Join-Path $ArtifactsDir "$($case.Name)-noresults"
+    $null = New-Item -ItemType Directory -Path $dir
+    Set-Content -LiteralPath (Join-Path $dir 'matrix.json') -Value '{"status":"ok"}'
+    $empty = Read-WpfRenderResult $dir
+    if ($empty.kind -ne 'matrix' -or @($empty.items).Count -ne 0) { $failures.Add("缺 results 的 matrix 应得到空 items：$(@($empty.items).Count)") }
     # 缺文件与残缺 JSON 都要抛错。
     $dir = Join-Path $ArtifactsDir "$($case.Name)-empty"
     $null = New-Item -ItemType Directory -Path $dir

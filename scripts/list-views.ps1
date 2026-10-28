@@ -10,9 +10,6 @@ $path = Resolve-WpfRenderConfig $Config
 $configDir = Split-Path -Parent $path
 $file = Read-WpfRenderConfigFile $path
 
-$settings = @{}
-if ($file.defaults) { foreach ($k in $file.defaults.Keys) { $settings[$k] = $file.defaults[$k] } }
-
 $views = @()
 foreach ($name in @($file.views.Keys | Sort-Object)) {
     $merged = Merge-WpfRenderPreset $file $name

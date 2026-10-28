@@ -12,7 +12,8 @@ function Read-WpfRenderResult([string]$OutDir) {
     $matrixPath = Join-Path $OutDir 'matrix.json'
     if (Test-Path -LiteralPath $matrixPath) {
         $matrix = Get-Content -LiteralPath $matrixPath -Raw | ConvertFrom-Json
-        return [pscustomobject]@{ kind = 'matrix'; items = @($matrix.results); raw = $matrix }
+        # @($null) 是含一个 null 的数组而不是空数组：results 缺失时过滤掉，调用方看到的是「没有结果」。
+        return [pscustomobject]@{ kind = 'matrix'; items = @($matrix.results | Where-Object { $_ }); raw = $matrix }
     }
     $summaryPath = Join-Path $OutDir 'summary.json'
     if (-not (Test-Path -LiteralPath $summaryPath)) { throw "$OutDir 里没有 matrix.json 或 summary.json（渲染是否失败？）" }

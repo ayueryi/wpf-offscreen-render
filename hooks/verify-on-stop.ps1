@@ -100,6 +100,8 @@ foreach ($name in $affected | Sort-Object) {
         . (Join-Path $PSScriptRoot '..\scripts\Results.ps1')
         try { $result = Read-WpfRenderResult "$outDir" }
         catch { $problems.Add("[$name] 没有得到渲染结果（$outDir）：$($_.Exception.Message)"); continue }
+        # results 缺失的残缺 matrix 解析出空 items：不能当成「通过」，否则验证会被静默跳过。
+        if (@($result.items).Count -eq 0) { $problems.Add("[$name] 渲染结果为空（$outDir）"); continue }
         $viewProblems = foreach ($item in $result.items) {
             $label = Get-WpfRenderItemLabel $result.raw $item $name
             if ("$($item.status)" -like 'failed*') {
