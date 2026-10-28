@@ -131,7 +131,7 @@ $combos = @(foreach ($s in $sizes) { foreach ($t in $Theme) { foreach ($d in $Dp
             } } })
 if ($combos.Count -eq 0) { throw '没有可渲染的组合：-Theme / -Dpi / -Size（或预设的 themes / dpis / sizes）不能为空。' }
 . (Join-Path $PSScriptRoot 'Steps.ps1')
-$normalizedSteps = @(ConvertTo-HarnessSteps $Steps)
+$normalizedSteps = @(ConvertTo-HarnessSteps $Steps $FactoryFile)
 if ($normalizedSteps.Count -gt 0 -and $combos.Count -gt 1) {
     throw "交互步骤不能与多个主题 / 尺寸 / DPI 同时使用（当前 $($combos.Count) 个组合）：请对每个组合分别渲染。"
 }

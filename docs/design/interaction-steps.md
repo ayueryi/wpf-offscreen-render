@@ -168,7 +168,7 @@ MCP：`render_view { "config": "C:\\repo", "preset": "OrderEditor" }`，或直�
 public static Task RunStepAsync(FrameworkElement view, string action, IReadOnlyDictionary<string, string> args)
 ```
 
-宿主用反射查找该方法：**未实现时不影响编译**（现有自定义工厂无需改动），只有用到 `custom` 步骤时才报错“ViewFactory 未实现 RunStepAsync”。`args` 的值统一为字符串（同 §10.2）。
+宿主用反射查找该方法：**未实现时不影响编译**（现有自定义工厂无需改动）。未实现而步骤里又用了 `custom` 时，生成宿主之前就会报错（检查工厂文件内容是否含 `RunStepAsync`，见 ADR-0001），不用等完整构建完才在执行时发现。`args` 的值统一为字符串（同 §10.2）。
 
 ## 9. 失败语义
 

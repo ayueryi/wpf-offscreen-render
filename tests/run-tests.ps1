@@ -290,14 +290,14 @@ function Test-StepsFailure($case) {
     $failures
 }
 
-# custom 步骤：自定义工厂实现 RunStepAsync 时可用；默认工厂未实现时只有用到 custom 才报错。
+# custom 步骤：自定义工厂实现 RunStepAsync 时可用；未实现时在生成宿主前即报错（错误左移，不浪费构建）。
 function Test-StepsCustom($case) {
     $failures = [Collections.Generic.List[string]]::new()
     $steps = @(@{ name = 'custom'; custom = @{ action = 'SetStatus'; args = @{ status = 'From factory' } } })
     $with = Invoke-Steps "$($case.Name)-with" 'net8' $steps -Generate @{ FactoryFile = Join-Path $fixtures 'StepsViewFactory.cs' }
     if ($with.Summary.status -ne 'ok' -or -not (Test-StepText $with.Steps[0] 'From factory')) { $failures.Add("custom 步骤应调用 RunStepAsync：$($with.Summary.status) $($with.Summary.error -join '; ')") }
-    $without = Invoke-Steps "$($case.Name)-without" 'net8' $steps
-    if ($without.Steps[0].error -notlike '*RunStepAsync*') { $failures.Add("未实现 RunStepAsync 时应明确报错：$($without.Steps[0].error)") }
+    try { $null = Invoke-Steps "$($case.Name)-without" 'net8' $steps; $failures.Add('默认工厂未实现 RunStepAsync 时应在生成期报错') }
+    catch { if ($_.Exception.Message -notlike '*RunStepAsync*') { $failures.Add("生成期报错应指明 RunStepAsync：$($_.Exception.Message)") } }
     $failures
 }
 

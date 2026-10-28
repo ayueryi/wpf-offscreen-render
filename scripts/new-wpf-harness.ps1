@@ -34,7 +34,7 @@ if ($ViewType -and $Xaml) { throw '-ViewType 与 -Xaml 只能二选一。' }
 if ($DataContextType -and $DataContextFactory) { throw '-DataContextType 与 -DataContextFactory 只能二选一。' }
 if (($DataContextType -or $DataContextFactory) -and -not ($ViewType -or $Xaml)) { throw '-DataContextType / -DataContextFactory 需要配合 -ViewType 或 -Xaml。' }
 . (Join-Path $PSScriptRoot 'Steps.ps1')
-$normalizedSteps = @(ConvertTo-HarnessSteps $Steps) # 先校验，写法有误时在生成工程前报错
+$normalizedSteps = @(ConvertTo-HarnessSteps $Steps $FactoryFile) # 先校验（含 custom 步骤的工厂实现检查），写法有误时在生成工程前报错
 # ProviderPath：UNC 路径（\\server\share）的 .Path 带 PowerShell 提供程序前缀，.NET API 无法使用。
 if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).ProviderPath }
 if ($Xaml) { $Xaml = (Resolve-Path -LiteralPath $Xaml).ProviderPath }

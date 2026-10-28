@@ -37,8 +37,20 @@ function ConvertTo-StepElement($Element, [string]$Where) {
     $result
 }
 
-function ConvertTo-HarnessSteps([string]$Steps) {
+function ConvertTo-HarnessSteps([string]$Steps, [string]$FactoryFile) {
     $list = Read-StepsInput $Steps
+    # custom 步骤由业务 ViewFactory.RunStepAsync 承接（运行时反射查找，未实现不影响编译）。
+    # 错误左移：在生成宿主之前就检查工厂是否实现了它，省得用户等完整构建完才在执行时发现。
+    # 判定与运行时反射同一约定、同一来源（同一份工厂文件）：内容含 RunStepAsync 即视为已实现。
+    if ($list | Where-Object { $_.custom }) {
+        $factorySource = if ($FactoryFile) { $FactoryFile } else { Join-Path $PSScriptRoot '..\assets\ViewFactory.cs' }
+        if (-not (Test-Path -LiteralPath $factorySource)) { throw "找不到工厂文件：$factorySource" }
+        $factoryText = Get-Content -LiteralPath $factorySource -Raw
+        if ($factoryText -notmatch 'RunStepAsync') {
+            throw "步骤里有 custom，但工厂$(if ($FactoryFile) { " $FactoryFile" } else { '（默认 ViewFactory.cs）' })没有实现 RunStepAsync。" +
+                "请在工厂中实现 RunStepAsync(FrameworkElement view, string action, IReadOnlyDictionary<string, string> args)，或去掉 custom 步骤。"
+        }
+    }
     $index = 0
     foreach ($step in $list) {
         $index++
