@@ -1,7 +1,7 @@
 {
   "name": "wpf-offscreen-render",
   "displayName": "WPF Offscreen Render",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "给 AI 一双看 WPF 的眼睛：离屏渲染真实 WPF / XAML 界面为 PNG，返回截图、绑定错误与布局问题，支持前后对比与多主题 / 尺寸 / DPI 组合（需要 Windows）。",
   "suggestedPrompts": [
     "渲染我刚修改的 WPF 页面并检查绑定错误与布局问题",

@@ -2,6 +2,25 @@
 
 版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
 
+## 1.4.0 – 2026-10-28
+
+架构整理：契约单一来源、脚本职责拆分与宿主入口分阶段，行为不变。
+
+### 修复与改进
+- 预设（wpf-render.json）的查找、解析、合并与互斥规则集中到 `scripts/Preset.ps1`：`render.ps1` 与新增的 `scripts/list-views.ps1`（MCP `list_views` 的实现）共用同一套规则，不再在脚本与 MCP 服务器中各写一份（此前曾因此漂移：带注释的 wpf-render.json 能渲染却列不出视图）。
+- 宿主缓存的键、构建戳与过期清理集中到 `scripts/Cache.ps1`，缓存策略只在一处定义。
+- 新增 `tests/WpfRenderLogic.Tests`：BindingIssues 解析与 Json 写入器（宿主纯逻辑）的单元测试，改解析逻辑时先跑这里，快于端到端回归。
+- `assets/Program.cs` 按阶段拆分为绑定监听、视图创建、元素截图、布局报告、manifest 构建与结果写出六个函数，入口只留编排。
+- 文档明确错误输出契约：`binding-errors.json` 为程序化消费的机器可读契约，`binding-errors.txt` 仅供人读。
+
+### 新增测试
+- `preset-merge`：断言 `list-views.ps1` 与 `Merge-WpfRenderPreset` 的合并结果一致（互斥与继承规则不得在两端漂移）。
+- `logic-tests`：在完整回归中运行单元测试工程。
+
+### 检查
+- 单元测试：6 通过，0 失败。
+- 回归抽测：sample-×5、preset×2、render-cache、cache-cleanup、mcp-server、logic-tests 均通过；完整回归见下节更新。
+
 ## 1.3.1 – 2026-10-24
 
 优化 WPF 离屏渲染 Skill 的工具路由、仓库根解析、产物生命周期和矩阵结果契约。
