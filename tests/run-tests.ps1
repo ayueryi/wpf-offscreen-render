@@ -84,6 +84,7 @@ $cases = @(
     @{ Name = 'preset-merge'; Kind = 'PresetMerge' }
     @{ Name = 'logic-tests'; Kind = 'LogicTests' }
     @{ Name = 'result-reader'; Kind = 'ResultReader' }
+    @{ Name = 'watch-matcher'; Kind = 'WatchMatcher' }
     @{ Name = 'steps-net8'; Kind = 'Steps'; Sample = 'net8' }
     @{ Name = 'steps-net472'; Kind = 'Steps'; Sample = 'net472' }
     @{ Name = 'steps-layout-only'; Kind = 'StepsLayoutOnly' }
@@ -476,6 +477,45 @@ function Test-ResultReader($case) {
     Set-Content -LiteralPath (Join-Path $dir 'summary.json') -Value '{broken'
     try { Read-WpfRenderResult $dir | Out-Null; $failures.Add('残缺 JSON 应抛错') } catch { }
     try { Read-WpfRenderResult (Join-Path $ArtifactsDir 'no-such-dir') | Out-Null; $failures.Add('目录不存在时应抛错') } catch { }
+    $failures
+}
+
+# Watches.ps1（watch 匹配的单一 module）：glob 语义、defaults 继承、命中文件返回，表驱动直测。
+function Test-WatchMatcher($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    . (Join-Path $root 'scripts\Watches.ps1')
+    $base = (Get-Location).Path.Replace('\', '/')
+    # 表：watch 模式 → 改动路径 → 是否命中。** 匹配零层是语义核心（src/**/*.xaml 也匹配 src/A.xaml）。
+    $table = @(
+        @{ Pattern = 'src/Order/**'; Path = "$base/src/Order/a.xaml"; Expect = $true }
+        @{ Pattern = 'src/Order/**'; Path = "$base/src/Order/sub/b.xaml"; Expect = $true }
+        @{ Pattern = 'src/Broken/**/*.txt'; Path = "$base/src/Broken/b.txt"; Expect = $true }
+        @{ Pattern = 'src/Broken/**/*.txt'; Path = "$base/src/Broken/sub/c.txt"; Expect = $true }
+        @{ Pattern = 'src/Broken/**/*.txt'; Path = "$base/src/Broken/other.xaml"; Expect = $false }
+        @{ Pattern = 'src/*/a.xaml'; Path = "$base/src/Order/a.xaml"; Expect = $true }
+        @{ Pattern = 'src/*/a.xaml'; Path = "$base/src/Order/sub/a.xaml"; Expect = $false }
+        @{ Pattern = 'src/a?.xaml'; Path = "$base/src/a1.xaml"; Expect = $true }
+        @{ Pattern = 'src/a?.xaml'; Path = "$base/src/a12.xaml"; Expect = $false }
+        @{ Pattern = 'src/Order/**'; Path = "$base/src/Other/a.xaml"; Expect = $false }
+    )
+    foreach ($row in $table) {
+        $hit = @($row.Path) | Where-Object { $_ -match (ConvertTo-WatchRegex $row.Pattern $base) }
+        if ([bool]$hit -ne $row.Expect) { $failures.Add("glob $($row.Pattern) 对 $($row.Path) 应$(if (-not $row.Expect) { '不' })命中") }
+    }
+    # Select-AffectedViews：defaults 继承、命中文件与视图一起返回。
+    $config = @{
+        defaults = @{ watch = @('common/**') }
+        views = @{
+            Order = @{ watch = @('src/Order/**') }
+            Broken = @{ watch = @('src/Broken/**/*.txt') }
+            Common = @{ }
+        }
+    }
+    $selection = Select-AffectedViews $config $base @("$base/src/Order/a.xaml", "$base/common/x.xaml")
+    if ("$(@($selection.Views) | Sort-Object)" -ne 'Common Order') { $failures.Add("应命中 Order 与继承 defaults 的 Common：$(@($selection.Views) -join ', ')") }
+    if (@($selection.Hits).Count -ne 2) { $failures.Add("Hits 应含两个命中文件：$(@($selection.Hits) -join ', ')") }
+    $none = Select-AffectedViews $config $base @("$base/src/Other/b.xaml")
+    if ($none.Views.Count -ne 0) { $failures.Add("无命中时应返回空视图列表：$($none.Views -join ', ')") }
     $failures
 }
 

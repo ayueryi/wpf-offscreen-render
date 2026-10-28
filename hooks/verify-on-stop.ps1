@@ -62,23 +62,14 @@ $changed = @(for ($i = 0; $i -lt $records.Count; $i++) {
 $changed = @($changed)
 if ($changed.Count -eq 0) { Exit-Quietly }
 
-# watch 模式相对于 wpf-render.json 所在目录：** 匹配任意层级（含零层，src/**/*.xaml 也匹配 src/A.xaml），
-# * 匹配单级中的任意字符，? 匹配单个非分隔符字符。
-function ConvertTo-Regex([string]$Pattern) {
-    $full = [IO.Path]::GetFullPath((Join-Path $dir $Pattern)).Replace('\', '/')
-    $escaped = [regex]::Escape($full) -replace '\\\*\\\*/', '(?:.*/)?' -replace '\\\*\\\*', '.*' -replace '\\\*', '[^/]*' -replace '\\\?', '[^/]'
-    "^$escaped$"
-}
-$defaults = if ($config.defaults) { $config.defaults } else { @{} }
-$relevant = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-$affected = @(foreach ($name in $config.views.Keys) {
-        $view = $config.views[$name]
-        $watch = @(if ($view.watch) { $view.watch } elseif ($defaults.watch) { $defaults.watch })
-        $regexes = @($watch | Where-Object { $_ } | ForEach-Object { ConvertTo-Regex $_ })
-        $hits = @($changed | Where-Object { $path = $_; $regexes | Where-Object { $path -match $_ } })
-        if ($hits.Count -gt 0) { $hits | ForEach-Object { $null = $relevant.Add($_) }; $name }
-    })
+# watch 模式的语义（** 匹配任意层级含零层、* 单级、? 单字符）与 defaults 继承在 Watches.ps1 中统一定义。
+. (Join-Path $PSScriptRoot '..\scripts\Watches.ps1')
+$selection = Select-AffectedViews $config $dir $changed
+$affected = $selection.Views
+$relevant = $selection.Hits
 if ($affected.Count -eq 0) { Exit-Quietly }
+# 渲染循环仍要用 defaults.build 选择构建命令（匹配用的 defaults 已内聚在 Watches.ps1）。
+$defaults = if ($config.defaults) { $config.defaults } else { @{} }
 
 # 同一份改动只验证一次，避免代理确认无法修复后被反复拦截。只对命中 watch 的文件（路径与内容）计算指纹，
 # 构建产物等其他变化不影响判断。
