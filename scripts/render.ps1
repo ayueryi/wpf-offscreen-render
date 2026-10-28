@@ -51,29 +51,13 @@ if (-not $IsWindows) { throw 'WPF 渲染需要 Windows。' }
 # 相对路径按 PowerShell 当前位置解析：.NET 文件 API 使用进程工作目录，Set-Location 不会改变它。
 $CacheRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CacheRoot)
 
+# 预设的查找、解析与合并规则在 Preset.ps1 中统一维护（list-views.ps1 共用），本脚本只处理参数覆盖与构建。
 if ($Preset -or $Config -or $Build) {
-    if (-not $Config) {
-        # 从当前目录向上查找 wpf-render.json。
-        $dir = (Get-Location).Path
-        while ($dir -and -not (Test-Path -LiteralPath (Join-Path $dir 'wpf-render.json'))) { $dir = Split-Path -Parent $dir }
-        if (-not $dir) { throw "从 $((Get-Location).Path) 向上没有找到 wpf-render.json，请用 -Config 指定。" }
-        $Config = Join-Path $dir 'wpf-render.json'
-    }
-    elseif (Test-Path -LiteralPath $Config -PathType Container) { $Config = Join-Path $Config 'wpf-render.json' }
-    $Config = (Resolve-Path -LiteralPath $Config).ProviderPath
+    . (Join-Path $PSScriptRoot 'Preset.ps1')
+    $Config = Resolve-WpfRenderConfig $Config
     $configDir = Split-Path -Parent $Config
-    $presetFile = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json -AsHashtable
-    $views = if ($presetFile.views) { $presetFile.views } else { @{} }
-    if (-not $Preset) { throw "需要 -Preset。$Config 中的视图：$(@($views.Keys) -join ', ')" }
-    if (-not $views.ContainsKey($Preset)) { throw "$Config 中没有视图 $Preset。可用：$(@($views.Keys) -join ', ')" }
-    # 互斥的键：一层中设置了其中一个，就覆盖下层（defaults）中与之互斥的键，与显式参数覆盖预设的规则相同。
-    $exclusive = @{ viewType = 'xaml'; xaml = 'viewType'; dataContextType = 'dataContextFactory'; dataContextFactory = 'dataContextType'; width = 'sizes'; height = 'sizes' }
-    $settings = @{}
-    foreach ($source in @($presetFile.defaults, $views[$Preset])) {
-        if (-not $source) { continue }
-        foreach ($k in $source.Keys) { if ($exclusive.ContainsKey($k)) { $settings.Remove($exclusive[$k]) } }
-        foreach ($k in $source.Keys) { $settings[$k] = $source[$k] }
-    }
+    $presetFile = Read-WpfRenderConfigFile $Config
+    $settings = Merge-WpfRenderPreset $presetFile $Preset
 
     # 相对路径相对于配置文件所在目录；pack URI（/Asm;component/...）、其他 URI 与绝对路径保持原样。
     $resolve = { param($value) if ([IO.Path]::IsPathRooted($value) -or $value -like '*;component/*' -or $value -match '^(pack|file|https?)://') { $value } else { [IO.Path]::GetFullPath((Join-Path $configDir $value)) } }
@@ -84,13 +68,11 @@ if ($Preset -or $Config -or $Build) {
         width = 'Width', $false; height = 'Height', $false; background = 'Background', $false; windowHost = 'WindowHost', $false; element = 'Element', $false
         steps = 'Steps', $false; continueOnError = 'ContinueOnError', $false; animations = 'Animations', $false
     }
-    # 显式参数覆盖预设：互斥的一组参数中显式传了任一个，预设里同组的键都不再生效
-    # （否则预设的 viewType 与显式的 -Xaml 会冲突，预设的 sizes 会让显式的 -Width / -Height 被忽略）。
-    $alsoOverrides = @{ ViewType = 'Xaml'; Xaml = 'ViewType'; DataContextType = 'DataContextFactory'; DataContextFactory = 'DataContextType'; Width = 'Size'; Height = 'Size' }
+    # 显式参数覆盖预设：互斥的一组参数中显式传了任一个，预设里同组的键都不再生效（互斥表在 Preset.ps1）。
     $overridden = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($name in $PSBoundParameters.Keys) {
         $null = $overridden.Add($name)
-        if ($alsoOverrides.ContainsKey($name)) { $null = $overridden.Add($alsoOverrides[$name]) }
+        foreach ($other in $script:ExplicitParameterOverrides[$name]) { $null = $overridden.Add($other) }
     }
     foreach ($key in $mapping.Keys) {
         $parameter, $isPath = $mapping[$key]
@@ -208,14 +190,9 @@ if ($NoCache) {
     return $run.OutDir
 }
 
-# 工具版本：生成器与宿主模板的内容哈希，模板更新后自动换新缓存。
-$toolFiles = @($generator) + @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '..\assets') -Filter '*.cs' | Sort-Object Name | ForEach-Object FullName)
-$keySource = [Text.StringBuilder]::new()
-foreach ($file in $toolFiles) { $null = $keySource.AppendLine((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash) }
-$null = $keySource.AppendLine("tfm=$TargetFramework;platform=$Platform;factory=$("$FactoryFile".ToLowerInvariant())")
-foreach ($assembly in $assemblies | Sort-Object) { $null = $keySource.AppendLine($assembly.ToLowerInvariant()) }
-$keyStream = [IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($keySource.ToString()))
-$key = (Get-FileHash -InputStream $keyStream -Algorithm SHA256).Hash.Substring(0, 16).ToLowerInvariant()
+# 缓存键、构建戳与过期清理在 Cache.ps1 中统一维护。
+. (Join-Path $PSScriptRoot 'Cache.ps1')
+$key = Get-WpfRenderCacheKey $generator (Join-Path $PSScriptRoot '..\assets') $TargetFramework $Platform "$FactoryFile" $assemblies
 $workDir = Join-Path $CacheRoot $key
 $null = New-Item -ItemType Directory -Path $CacheRoot -Force
 
@@ -229,13 +206,10 @@ try {
     $stampPath = Join-Path $workDir 'cache.json'
     # 立即标记为“正在使用”，避免其他进程按过期时间清理这个目录。
     if (Test-Path -LiteralPath $stampPath) { (Get-Item -LiteralPath $stampPath).LastWriteTime = Get-Date }
-    # 构建会连同依赖一起复制，所以记录业务程序集所在目录中全部 dll / exe 的大小与修改时间。
-    $stamps = @($assemblies | ForEach-Object { Split-Path -Parent $_ } | Sort-Object -Unique |
-        ForEach-Object { Get-ChildItem -LiteralPath $_ -File | Where-Object Extension -in '.dll', '.exe' } |
-        Sort-Object FullName | ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" })
+    # 构建会连同依赖一起复制，所以记录业务程序集所在目录中全部 dll / exe 的大小与修改时间；
     # ViewFactory.cs 编进宿主：内容变化时需要重新构建。
     $factorySource = if ($FactoryFile) { $FactoryFile } else { Join-Path $PSScriptRoot '..\assets\ViewFactory.cs' }
-    $stamps += "factory|$((Get-FileHash -LiteralPath $factorySource -Algorithm SHA256).Hash)"
+    $stamps = Get-WpfRenderBuildStamps $assemblies $factorySource
     $noBuild = $false
     $projectPath = Join-Path $workDir 'RenderHarness.csproj'
     if (Test-Path -LiteralPath $projectPath) {
@@ -284,28 +258,8 @@ finally {
     $mutex.Dispose()
 }
 
-# 清理过期缓存与渲染结果。只删除能立即拿到互斥量的目录：拿不到说明另一个进程正在使用它。
-# 只处理本工具创建的缓存目录（16 位十六进制名称且含 cache.json 或 RenderHarness.csproj）：-CacheRoot 可能指向共享目录。
-$cutoff = (Get-Date).AddDays(-$RetentionDays)
-foreach ($dir in Get-ChildItem -LiteralPath $CacheRoot -Directory) {
-    if ($dir.FullName -eq $workDir -or $dir.Name -notmatch '^[0-9a-f]{16}$') { continue }
-    $stamp = Join-Path $dir.FullName 'cache.json'
-    $hasStamp = Test-Path -LiteralPath $stamp
-    if (-not $hasStamp -and -not (Test-Path -LiteralPath (Join-Path $dir.FullName 'RenderHarness.csproj'))) { continue }
-    $lastUsed = if ($hasStamp) { (Get-Item -LiteralPath $stamp).LastWriteTime } else { $dir.LastWriteTime }
-    if ($lastUsed -ge $cutoff) { continue }
-    $lock = [Threading.Mutex]::new($false, "Local\wpf-render-$($dir.Name)")
-    try {
-        $acquired = try { $lock.WaitOne(0) } catch [Threading.AbandonedMutexException] { $true }
-        if ($acquired) {
-            try { Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-            finally { $lock.ReleaseMutex() }
-        }
-    }
-    finally { $lock.Dispose() }
-}
-Get-ChildItem -LiteralPath $workDir -Directory | Where-Object { $_.Name -like 'render-*' -or $_.Name -like 'matrix-*' } |
-    Where-Object { $_.LastWriteTime -lt $cutoff } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+# 清理过期缓存与渲染结果（策略在 Cache.ps1）。
+Remove-ExpiredWpfRenderCache $CacheRoot $workDir $RetentionDays
 
 $global:LASTEXITCODE = $run.ExitCode
 $run.OutDir

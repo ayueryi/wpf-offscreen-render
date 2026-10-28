@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 宿主纯逻辑（BindingIssues / LayoutReport / Json）的单元测试：直接编入 assets 源码，无需 WPF 渲染进程。
+       端到端回归（渲染真实视图）在 tests/run-tests.ps1，两者互补；此处跑得快，改解析与检查逻辑时先跑这里。 -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\assets\Diagnostics.cs" Link="Diagnostics.cs" />
+    <Compile Include="..\..\assets\Json.cs" Link="Json.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+</Project>

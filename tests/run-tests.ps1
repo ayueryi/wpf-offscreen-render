@@ -81,6 +81,8 @@ $cases = @(
     @{ Name = 'factory-file'; Sample = 'net8'; Generate = @{ FactoryFile = Join-Path $fixtures 'CustomViewFactory.cs' }
         Expect = @{ exitCode = 0; status = 'ok'; sourceViewType = 'SampleViews.OrderView'; layoutText = 'Custom factory order' } }
     @{ Name = 'preset'; Kind = 'Preset' }
+    @{ Name = 'preset-merge'; Kind = 'PresetMerge' }
+    @{ Name = 'logic-tests'; Kind = 'LogicTests' }
     @{ Name = 'steps-net8'; Kind = 'Steps'; Sample = 'net8' }
     @{ Name = 'steps-net472'; Kind = 'Steps'; Sample = 'net472' }
     @{ Name = 'steps-layout-only'; Kind = 'StepsLayoutOnly' }
@@ -413,6 +415,44 @@ function Test-Preset($case) {
     if ($LASTEXITCODE -ne 2) { $failures.Add("Broken 预设应以退出码 2 报告绑定问题：$LASTEXITCODE") }
     try { $null = & $oneStep -Config $dir -Preset Missing -CacheRoot $cache 6> $null; $failures.Add('未知预设应报错') }
     catch { if ($_.Exception.Message -notlike '*Order*Broken*' -and $_.Exception.Message -notlike '*Broken*Order*') { $failures.Add("未知预设的报错应列出可用视图：$($_.Exception.Message)") } }
+    $failures
+}
+
+# Preset.ps1 合并规则：render.ps1 与 list-views.ps1（MCP list_views）共用，互斥键不得在两层各自漂移。
+function Test-PresetMerge($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $dir = New-PresetProject $case.Name
+    $list = & (Join-Path $root 'scripts\list-views.ps1') -Config $dir | ConvertFrom-Json
+    if ("$(@($list.views) | ForEach-Object name | Sort-Object)" -ne 'Broken Interactive Loose Order Sized Themes') {
+        $failures.Add("list-views 列出的视图不符：$(@($list.views) | ForEach-Object name | Sort-Object -join ', ')")
+    }
+    $loose = @($list.views | Where-Object name -eq 'Loose')[0]
+    # 视图层的 xaml 覆盖 defaults 的 viewType（互斥），且解析为绝对路径。
+    if ($loose.xaml -notlike '*.xaml' -or [IO.Path]::IsPathRooted($loose.xaml) -eq $false -or $loose.viewType) {
+        $failures.Add("Loose 应解析 xaml 为绝对路径且不继承 viewType：$($loose | ConvertTo-Json -Compress)")
+    }
+    $order = @($list.views | Where-Object name -eq 'Order')[0]
+    if ($order.viewType -ne 'SampleViews.OrderView' -or -not $order.hasBuild) {
+        $failures.Add("Order 应合并 defaults 的 build：$($order | ConvertTo-Json -Compress)")
+    }
+    $themesView = @($list.views | Where-Object name -eq 'Themes')[0]
+    if (@($themesView.themes).Count -ne 2) { $failures.Add("Themes 应列出预设 themes：$($themesView.themes -join ',')") }
+    $sized = @($list.views | Where-Object name -eq 'Sized')[0]
+    if ("$(@($sized.sizes) -join ',')" -ne '800x600,1024x768') { $failures.Add("Sized 应列出预设 sizes：$($sized.sizes -join ',')") }
+    # Merge-WpfRenderPreset 与 list-views 的合并结果一致（同源函数的直接断言）。
+    . (Join-Path $root 'scripts\Preset.ps1')
+    $file = Read-WpfRenderConfigFile (Join-Path $dir 'wpf-render.json')
+    $merged = Merge-WpfRenderPreset $file 'Loose'
+    if ($merged.xaml -ne $loose.xaml) { $failures.Add('Merge-WpfRenderPreset 与 list-views 的结果不一致') }
+    $failures
+}
+
+# 宿主纯逻辑单元测试（BindingIssues / Json）：改解析与序列化逻辑时先跑这里，快于端到端。
+function Test-LogicTests($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    & dotnet test (Join-Path $root 'tests\WpfRenderLogic.Tests\WpfRenderLogic.Tests.csproj') -c Release --nologo 2>&1 |
+        ForEach-Object { "$_" } | Where-Object { $_ -match '^\s+Failed |error ' } | ForEach-Object { $failures.Add($_) }
+    if ($LASTEXITCODE -ne 0 -and $failures.Count -eq 0) { $failures.Add("单元测试退出码 $LASTEXITCODE") }
     $failures
 }
 

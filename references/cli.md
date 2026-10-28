@@ -133,9 +133,9 @@
 | --- | --- | --- |
 | `snapshot.png` | 渲染成功（含存在绑定错误时） | 目标视觉快照 |
 | `manifest.json` | 渲染成功 | 元数据，见下表 |
-| `binding-errors.txt` | 宿主正常结束 | 去重后的真实绑定告警 / 错误，每条一行；为空表示无问题（前提是自检通过） |
+| `binding-errors.txt` | 宿主正常结束 | 去重后的真实绑定告警 / 错误，每条一行；为空表示无问题（前提是自检通过）。仅供人读；程序化消费应读 `binding-errors.json` |
 | `element.png` | 使用 `-Element` 且渲染成功 | 指定元素的截图，尺寸为元素的 `RenderSize` × DPI / 96 |
-| `binding-errors.json` | 宿主正常结束 | 同上，逐条解析出 `targetElement` / `targetName` / `targetProperty` / `path` / `dataItem` / `reason` 与单行 `summary` |
+| `binding-errors.json` | 宿主正常结束 | 绑定问题的机器可读契约：逐条解析出 `targetElement` / `targetName` / `targetProperty` / `path` / `dataItem` / `reason` 与单行 `summary`。`summary.json` 的 `bindingIssues` 取自此文件，脚本在旧宿主没有它时才回退到 `binding-errors.txt` |
 | `layout.json` | 渲染成功 | 视觉树中每个可见 `FrameworkElement` 的类型、名称、截图坐标中的矩形（DIP，已计入根元素自身的 Margin / 对齐偏移，与 `snapshot.png` 和 `elementRectDip` 一致）与文本（最多 3000 个），以及布局问题 `issues`。节点矩形是元素需要的完整尺寸，被父容器或自身槽位裁掉的部分也包含在内；实际可见范围以 `issues` 中的说明为准 |
 | `steps.json`、`steps/<序号>-<名称>/`、`steps-overview.png` | 使用交互步骤时 | 逐步结果、每步截图与 `layout.json`、动画帧、对话框截图，以及全部截图的总览图；`summary.json` 中对应 `steps` 与 `stepsOverview`，见 [steps.md](steps.md#结果) |
 | `build.log` | 未使用 `-NoBuild` | `dotnet build` 完整输出 |

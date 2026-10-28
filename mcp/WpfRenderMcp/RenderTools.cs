@@ -104,30 +104,25 @@ public sealed class RenderTools(ScriptRunner runner)
     }
 
     [McpServerTool(Name = "list_views", Title = "List WPF render presets", ReadOnly = true, Idempotent = true, OpenWorld = false)]
-    [Description("列出业务项目 wpf-render.json 中配置的视图（名称、视图类型、主题 / 尺寸、watch 文件模式），供 render_view 的 preset 参数使用。")]
-    public CallToolResult ListViews([Description("wpf-render.json 的绝对路径或其所在目录")] string config)
+    [Description("列出业务项目 wpf-render.json 中配置的视图（名称、合并 defaults 后的视图类型、主题 / 尺寸、watch 文件模式），供 render_view 的 preset 参数使用。")]
+    public async Task<CallToolResult> ListViews(
+        [Description("wpf-render.json 的绝对路径或其所在目录")] string config,
+        CancellationToken cancellationToken = default)
     {
         if (RelativePathError(("config", config)) is { } pathError) return Error(pathError);
-        var path = Directory.Exists(config) ? Path.Combine(config, "wpf-render.json") : config;
-        if (ReadJson(path) is not { } file) return Error($"找不到或无法解析 {path}。");
-        var defaults = file["defaults"] as JsonObject;
-        var views = new JsonArray();
-        foreach (var (name, value) in file["views"] as JsonObject ?? [])
+        // 合并规则与 render.ps1 同源（scripts/Preset.ps1），避免两端各自复刻互斥与继承逻辑后漂移。
+        var result = await runner.RunAsync(Path.Combine("scripts", "list-views.ps1"), new Dictionary<string, object?> { ["Config"] = config },
+            TimeSpan.FromMinutes(1), cancellationToken);
+        if (result.Error is not null || result.Output.Length == 0) return ScriptFailure(result);
+        try
         {
-            // 视图设置了互斥键中的一个时，不再继承 defaults 中的另一个（与 render.ps1 的合并规则一致）。
-            JsonNode? Setting(string key) => (value?[key] ?? (Exclusive(key).Any(other => value?[other] is not null) ? null : defaults?[key]))?.DeepClone();
-            views.Add(new JsonObject
-            {
-                ["name"] = name,
-                ["viewType"] = Setting("viewType"),
-                ["xaml"] = Setting("xaml"),
-                ["themes"] = Setting("themes"),
-                ["sizes"] = Setting("sizes"),
-                ["watch"] = Setting("watch"),
-                ["hasBuild"] = Setting("build") is not null,
-            });
+            var json = JsonNode.Parse(string.Join("\n", result.Output));
+            return json is null ? ScriptFailure(result) : new CallToolResult { Content = [Text(json)] };
         }
-        return new CallToolResult { Content = [Text(new JsonObject { ["config"] = Path.GetFullPath(path), ["verifyOnStop"] = file["verifyOnStop"]?.DeepClone(), ["views"] = views })] };
+        catch (JsonException)
+        {
+            return ScriptFailure(result);
+        }
     }
 
     [McpServerTool(Name = "render_matrix", Title = "Render WPF view matrix", ReadOnly = false, Destructive = false, OpenWorld = false)]
@@ -256,14 +251,6 @@ public sealed class RenderTools(ScriptRunner runner)
         if (result.Error is not null) text += $"\n错误：{result.Error}";
         return new CallToolResult { Content = [new TextContentBlock { Text = text }], IsError = result.ExitCode != 0 };
     }
-
-    private static string[] Exclusive(string key) => key switch
-    {
-        "viewType" => ["xaml"],
-        "xaml" => ["viewType"],
-        "sizes" => ["width", "height"],
-        _ => [],
-    };
 
     // 相对路径按服务器的工作目录解析。Codex 等客户端以插件目录为工作目录启动服务器，此时相对路径会指向插件内部，直接报错。
     private string? RelativePathError(params (string Name, string? Value)[] paths)

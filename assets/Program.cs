@@ -47,66 +47,20 @@ internal static class Program
             using var listener = new BindingListener(marker);
             try
             {
-                PresentationTraceSources.Refresh();
-                PresentationTraceSources.DataBindingSource.Switch.Level = SourceLevels.Warning;
-                PresentationTraceSources.DataBindingSource.Listeners.Add(listener);
-                // 用独立的小型 Visual 验证监听链路，避免污染目标视图或清空真实绑定错误。
-                var probe = new TextBlock { DataContext = new object() };
-                probe.SetBinding(TextBlock.TextProperty, new Binding(marker));
-                probe.Measure(new Size(100, 30));
-                probe.Arrange(new Rect(0, 0, 100, 30));
+                await AttachBindingListenerAsync(listener);
+                (view, window) = await CreateViewAsync(args, Value);
+                var root = (FrameworkElement)(window?.Content ?? view);
                 await IdleAsync();
-                BindingOperations.ClearBinding(probe, TextBlock.TextProperty);
+                root.UpdateLayout();
+                await ViewFactory.WaitUntilReadyAsync(view);
+                await IdleAsync();
+                root.UpdateLayout();
 
                 var width = int.Parse(Value("--width"), CultureInfo.InvariantCulture);
                 var height = int.Parse(Value("--height"), CultureInfo.InvariantCulture);
                 var dpi = int.Parse(Value("--dpi"), CultureInfo.InvariantCulture);
                 var theme = Value("--theme");
                 var hosted = args.Contains("--window-host");
-                var elementName = Optional("--element");
-                view = ViewFactory.Create(theme);
-                FrameworkElement root = view;
-                if (hosted)
-                {
-                    window = view as Window ?? new Window { Content = view };
-                    // 最大化 / 最小化的窗口会忽略 Left / Top / Width / Height，出现在真实屏幕上或尺寸不受控。
-                    window.WindowState = WindowState.Normal;
-                    window.Topmost = false;
-                    window.ShowActivated = false;
-                    window.ShowInTaskbar = false;
-                    window.WindowStartupLocation = WindowStartupLocation.Manual;
-                    window.Left = -20000;
-                    window.Top = -20000;
-                    window.WindowStyle = WindowStyle.None;
-                    window.ResizeMode = ResizeMode.NoResize;
-                    window.SizeToContent = SizeToContent.Manual;
-                    window.Width = width;
-                    window.Height = height;
-                    window.Show();
-                    root = window.Content as FrameworkElement
-                        ?? throw new InvalidOperationException("Window.Content 必须是 FrameworkElement。");
-                    await IdleAsync();
-                    // 业务窗口常在 SourceInitialized / Loaded 中恢复上次的位置与最大化状态：显示后再强制一次。
-                    window.WindowState = WindowState.Normal;
-                    window.Left = -20000;
-                    window.Top = -20000;
-                    window.Width = width;
-                    window.Height = height;
-                    await IdleAsync();
-                }
-                else
-                {
-                    if (view is Window) throw new InvalidOperationException("Window 需要 -WindowHost 模式。");
-                    root.Measure(new Size(width, height));
-                    root.Arrange(new Rect(0, 0, width, height));
-                }
-                root.UpdateLayout();
-                await ViewFactory.WaitUntilReadyAsync(view);
-                await IdleAsync();
-                root.UpdateLayout();
-
-                var pixelWidth = (int)Math.Ceiling(width * dpi / 96.0);
-                var pixelHeight = (int)Math.Ceiling(height * dpi / 96.0);
                 var (background, backgroundSource) = ResolveBackground(Optional("--background") ?? "auto", theme, window, view is Window);
                 var bitmap = RenderRoot(root, width, height, dpi, background);
                 // RenderTargetBitmap 按根元素自身的变换与偏移（Margin、对齐、固定尺寸居中）绘制；
@@ -115,37 +69,9 @@ internal static class Program
                 var pngPath = Path.Combine(outDir, "snapshot.png");
                 SavePng(bitmap, pngPath);
 
-                // -Element：另存指定 x:Name 元素的截图。
-                double[]? elementRect = null;
-                string? elementError = null;
-                if (elementName is not null)
-                {
-                    var target = Descendants(root).FirstOrDefault(element => element.Name == elementName)
-                        ?? throw new InvalidOperationException($"找不到 x:Name 为 {elementName} 的可见元素。可用名称：" +
-                            string.Join(", ", Descendants(root).Select(element => element.Name).Where(name => name.Length > 0).Distinct().Take(40)));
-                    var size = target.RenderSize;
-                    var toRoot = ReferenceEquals(target, root) ? Transform.Identity : target.TransformToAncestor(root);
-                    var bounds = rootToImage.TransformBounds(toRoot.TransformBounds(new Rect(size)));
-                    elementRect = [Math.Round(bounds.X, 1), Math.Round(bounds.Y, 1), Math.Round(bounds.Width, 1), Math.Round(bounds.Height, 1)];
-                    var elementPixelWidth = Math.Max(1, (int)Math.Ceiling(size.Width * dpi / 96.0));
-                    var elementPixelHeight = Math.Max(1, (int)Math.Ceiling(size.Height * dpi / 96.0));
-                    // 未虚拟化的长列表等元素可能远大于视口：超过上限时不生成 element.png，整页截图与布局报告照常输出。
-                    if ((long)elementPixelWidth * elementPixelHeight > MaxPixels)
-                        elementError = $"元素 {elementName} 为 {elementPixelWidth}×{elementPixelHeight} 像素，超过 {MaxPixels / 1000000} 百万像素上限，未生成 element.png。";
-                    else
-                        WriteElementImage(target, size, background, elementPixelWidth, elementPixelHeight, dpi, Path.Combine(outDir, "element.png"));
-                }
+                var (elementRect, elementError) = CaptureElement(root, rootToImage, Optional("--element"), width, height, dpi, background, outDir);
                 listener.Flush();
-                // 布局检查只提供线索，不影响退出码；检查本身出错时记录原因，不让渲染失败。
-                int? layoutIssueCount = null;
-                string? layoutReportError = null;
-                try
-                {
-                    var (layout, issueCount) = LayoutReport.Inspect(root, rootToImage, width, height, dpi / 96.0);
-                    File.WriteAllText(Path.Combine(outDir, "layout.json"), Json.Write(layout));
-                    layoutIssueCount = issueCount;
-                }
-                catch (Exception ex) { layoutReportError = ex.GetType().Name + ": " + ex.Message; }
+                var (layoutIssueCount, layoutReportError) = WriteLayoutReport(root, rootToImage, width, height, dpi, outDir);
 
                 // 交互步骤（harness.json 中的 steps）：在初始截图之后依次执行，每步截图并检查。
                 List<object?>? stepReports = null;
@@ -165,38 +91,8 @@ internal static class Program
                 using (var sha = SHA256.Create())
                     sha256 = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(pngPath))).Replace("-", "").ToLowerInvariant();
                 // 绑定问题条数与退出码在 finally 中补齐后一次性写出。
-                manifest =
-                [
-                    new("generatedAt", DateTime.UtcNow.ToString("O")),
-                    new("toolVersion", Optional("--tool-version")),
-                    new("mode", hosted ? "window-host" : "layout-only"),
-                    new("sourceViewType", view.GetType().FullName),
-                    new("theme", theme),
-                    new("widthDip", width), new("heightDip", height),
-                    new("pixelWidth", pixelWidth), new("pixelHeight", pixelHeight), new("dpi", dpi),
-                    new("actualWidthDip", root.ActualWidth), new("actualHeightDip", root.ActualHeight),
-                    new("background", background?.ToString() ?? "transparent"), new("backgroundSource", backgroundSource),
-                    new("bindingTraceVerified", listener.SelfCheckHit),
-                    new("layoutIssueCount", layoutIssueCount),
-                    new("layoutReportError", layoutReportError),
-                    new("element", elementName),
-                    new("elementRectDip", elementRect),
-                    new("elementImage", elementName is null || elementError is not null ? null : "element.png"),
-                    new("elementError", elementError),
-                    new("stepCount", stepReports?.Count),
-                    new("stepsFailed", stepReports is null ? null : stepsFailed),
-                    new("steps", stepReports is null ? null : "steps.json"),
-                    new("image", "snapshot.png"),
-                    new("sha256", sha256),
-                    new("targetFramework", typeof(Program).Assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName),
-                    new("runtime", RuntimeInformation.FrameworkDescription),
-                    new("processArchitecture", RuntimeInformation.ProcessArchitecture.ToString()),
-                    new("machineName", Environment.MachineName),
-                    // 业务 Window 为 RightToLeft 时，镜像变换在 Window 上而截图只渲染其 Content，结果未镜像。
-                    new("warning", hosted && view is Window { FlowDirection: FlowDirection.RightToLeft }
-                        ? "Window.FlowDirection 为 RightToLeft：截图与布局坐标未镜像（镜像在 Window 本身上）。可改为渲染其内容的 UserControl。" : null),
-                    new("note", "Visual snapshot; native windows, input, and performance require separate verification.")
-                ];
+                manifest = BuildManifest(args, Optional, view, hosted, theme, width, height, dpi, root, background, backgroundSource,
+                    listener.SelfCheckHit, layoutIssueCount, layoutReportError, elementRect, elementError, stepReports, stepsFailed, sha256);
                 // 3：有步骤失败（结果仍完整写出，不写 error.txt）；2：有绑定问题。
                 exitCode = !listener.SelfCheckHit ? 1 : stepsFailed ? 3 : listener.Errors.Count > 0 ? 2 : 0;
                 if (!listener.SelfCheckHit)
@@ -209,31 +105,7 @@ internal static class Program
             }
             finally
             {
-                // 先写出全部结果，再执行业务清理：清理可能卡住（例如窗口关闭确认框），结果不能因此丢失。
-                listener.Flush();
-                PresentationTraceSources.DataBindingSource.Listeners.Remove(listener);
-                File.WriteAllLines(Path.Combine(outDir, "binding-errors.txt"), listener.Errors);
-                File.WriteAllText(Path.Combine(outDir, "binding-errors.json"), Json.Write(listener.Errors.Select(BindingIssues.Describe).ToList()));
-                if (exitCode == 0 && listener.Errors.Count > 0) exitCode = 2;
-                if (manifest is not null)
-                {
-                    manifest.Add(new("bindingWarningOrErrorCount", listener.Errors.Count));
-                    manifest.Add(new("exitCode", exitCode));
-                    File.WriteAllText(Path.Combine(outDir, "manifest.json"), Json.Write(manifest));
-                }
-                Console.WriteLine($"{outDir} (exit={exitCode})");
-                try
-                {
-                    if (view != null) ViewFactory.Cleanup(view);
-                }
-                catch (Exception ex)
-                {
-                    File.AppendAllText(Path.Combine(outDir, "error.txt"), ex.ToString());
-                    exitCode = 1;
-                }
-                // 不关闭窗口、不调用 Application.Shutdown（会关闭全部窗口并触发 Closing 中的确认对话框）：
-                // 只停止消息循环，随后由 Environment.Exit 结束进程。
-                app.Dispatcher.InvokeShutdown();
+                exitCode = WriteResults(app, listener, outDir, manifest, exitCode, ref view);
             }
         });
         app.Run();
@@ -241,6 +113,169 @@ internal static class Program
         Console.Out.Flush();
         Console.Error.Flush();
         Environment.Exit(exitCode);
+        return exitCode;
+    }
+
+    // 绑定 trace 监听：先于视图构造启用，并用带标记的错误绑定自检采集链路。
+    private static async Task AttachBindingListenerAsync(BindingListener listener)
+    {
+        PresentationTraceSources.Refresh();
+        PresentationTraceSources.DataBindingSource.Switch.Level = SourceLevels.Warning;
+        PresentationTraceSources.DataBindingSource.Listeners.Add(listener);
+        // 用独立的小型 Visual 验证监听链路，避免污染目标视图或清空真实绑定错误。
+        var probe = new TextBlock { DataContext = new object() };
+        probe.SetBinding(TextBlock.TextProperty, new Binding(listener.Marker));
+        probe.Measure(new Size(100, 30));
+        probe.Arrange(new Rect(0, 0, 100, 30));
+        await IdleAsync();
+        BindingOperations.ClearBinding(probe, TextBlock.TextProperty);
+    }
+
+    // 创建视图；windowHost 模式下用屏外窗口承载（真实窗口生命周期，但不出现在屏幕上）。
+    private static async Task<(FrameworkElement View, Window? Window)> CreateViewAsync(string[] args, Func<string, string> value)
+    {
+        var width = int.Parse(value("--width"), CultureInfo.InvariantCulture);
+        var height = int.Parse(value("--height"), CultureInfo.InvariantCulture);
+        var view = ViewFactory.Create(value("--theme"));
+        if (!args.Contains("--window-host"))
+        {
+            if (view is Window) throw new InvalidOperationException("Window 需要 -WindowHost 模式。");
+            view.Measure(new Size(width, height));
+            view.Arrange(new Rect(0, 0, width, height));
+            return (view, null);
+        }
+        var window = view as Window ?? new Window { Content = view };
+        // 最大化 / 最小化的窗口会忽略 Left / Top / Width / Height，出现在真实屏幕上或尺寸不受控。
+        window.WindowState = WindowState.Normal;
+        window.Topmost = false;
+        window.ShowActivated = false;
+        window.ShowInTaskbar = false;
+        window.WindowStartupLocation = WindowStartupLocation.Manual;
+        window.Left = -20000;
+        window.Top = -20000;
+        window.WindowStyle = WindowStyle.None;
+        window.ResizeMode = ResizeMode.NoResize;
+        window.SizeToContent = SizeToContent.Manual;
+        window.Width = width;
+        window.Height = height;
+        window.Show();
+        await IdleAsync();
+        // 业务窗口常在 SourceInitialized / Loaded 中恢复上次的位置与最大化状态：显示后再强制一次。
+        window.WindowState = WindowState.Normal;
+        window.Left = -20000;
+        window.Top = -20000;
+        window.Width = width;
+        window.Height = height;
+        await IdleAsync();
+        if (window.Content is not FrameworkElement content)
+            throw new InvalidOperationException("Window.Content 必须是 FrameworkElement。");
+        return (view, window);
+    }
+
+    // -Element：另存指定 x:Name 元素的截图，返回其在截图中的矩形与错误说明。
+    private static (double[]? Rect, string? Error) CaptureElement(FrameworkElement root, GeneralTransform rootToImage,
+        string? elementName, int width, int height, int dpi, Brush? background, string outDir)
+    {
+        if (elementName is null) return (null, null);
+        var target = Descendants(root).FirstOrDefault(element => element.Name == elementName)
+            ?? throw new InvalidOperationException($"找不到 x:Name 为 {elementName} 的可见元素。可用名称：" +
+                string.Join(", ", Descendants(root).Select(element => element.Name).Where(name => name.Length > 0).Distinct().Take(40)));
+        var size = target.RenderSize;
+        var toRoot = ReferenceEquals(target, root) ? Transform.Identity : target.TransformToAncestor(root);
+        var bounds = rootToImage.TransformBounds(toRoot.TransformBounds(new Rect(size)));
+        var rect = new[] { Math.Round(bounds.X, 1), Math.Round(bounds.Y, 1), Math.Round(bounds.Width, 1), Math.Round(bounds.Height, 1) };
+        var elementPixelWidth = Math.Max(1, (int)Math.Ceiling(size.Width * dpi / 96.0));
+        var elementPixelHeight = Math.Max(1, (int)Math.Ceiling(size.Height * dpi / 96.0));
+        // 未虚拟化的长列表等元素可能远大于视口：超过上限时不生成 element.png，整页截图与布局报告照常输出。
+        if ((long)elementPixelWidth * elementPixelHeight > MaxPixels)
+            return (rect, $"元素 {elementName} 为 {elementPixelWidth}×{elementPixelHeight} 像素，超过 {MaxPixels / 1000000} 百万像素上限，未生成 element.png。");
+        WriteElementImage(target, size, background, elementPixelWidth, elementPixelHeight, dpi, Path.Combine(outDir, "element.png"));
+        return (rect, null);
+    }
+
+    // 布局检查只提供线索，不影响退出码；检查本身出错时记录原因，不让渲染失败。
+    private static (int? IssueCount, string? Error) WriteLayoutReport(FrameworkElement root, GeneralTransform rootToImage,
+        int width, int height, int dpi, string outDir)
+    {
+        try
+        {
+            var (layout, issueCount) = LayoutReport.Inspect(root, rootToImage, width, height, dpi / 96.0);
+            File.WriteAllText(Path.Combine(outDir, "layout.json"), Json.Write(layout));
+            return (issueCount, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.GetType().Name + ": " + ex.Message);
+        }
+    }
+
+    private static List<KeyValuePair<string, object?>> BuildManifest(string[] args, Func<string, string?> optional, FrameworkElement view,
+        bool hosted, string theme, int width, int height, int dpi, FrameworkElement root, Brush? background, string backgroundSource,
+        bool selfCheckHit, int? layoutIssueCount, string? layoutReportError, double[]? elementRect, string? elementError,
+        List<object?>? stepReports, bool stepsFailed, string sha256)
+    {
+        return
+        [
+            new("generatedAt", DateTime.UtcNow.ToString("O")),
+            new("toolVersion", optional("--tool-version")),
+            new("mode", hosted ? "window-host" : "layout-only"),
+            new("sourceViewType", view.GetType().FullName),
+            new("theme", theme),
+            new("widthDip", width), new("heightDip", height),
+            new("pixelWidth", (int)Math.Ceiling(width * dpi / 96.0)), new("pixelHeight", (int)Math.Ceiling(height * dpi / 96.0)), new("dpi", dpi),
+            new("actualWidthDip", root.ActualWidth), new("actualHeightDip", root.ActualHeight),
+            new("background", background?.ToString() ?? "transparent"), new("backgroundSource", backgroundSource),
+            new("bindingTraceVerified", selfCheckHit),
+            new("layoutIssueCount", layoutIssueCount),
+            new("layoutReportError", layoutReportError),
+            new("element", optional("--element")),
+            new("elementRectDip", elementRect),
+            new("elementImage", optional("--element") is null || elementError is not null ? null : "element.png"),
+            new("elementError", elementError),
+            new("stepCount", stepReports?.Count),
+            new("stepsFailed", stepReports is null ? null : stepsFailed),
+            new("steps", stepReports is null ? null : "steps.json"),
+            new("image", "snapshot.png"),
+            new("sha256", sha256),
+            new("targetFramework", typeof(Program).Assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName),
+            new("runtime", RuntimeInformation.FrameworkDescription),
+            new("processArchitecture", RuntimeInformation.ProcessArchitecture.ToString()),
+            new("machineName", Environment.MachineName),
+            // 业务 Window 为 RightToLeft 时，镜像变换在 Window 上而截图只渲染其 Content，结果未镜像。
+            new("warning", hosted && view is Window { FlowDirection: FlowDirection.RightToLeft }
+                ? "Window.FlowDirection 为 RightToLeft：截图与布局坐标未镜像（镜像在 Window 本身上）。可改为渲染其内容的 UserControl。" : null),
+            new("note", "Visual snapshot; native windows, input, and performance require separate verification.")
+        ];
+    }
+
+    // 先写出全部结果，再执行业务清理：清理可能卡住（例如窗口关闭确认框），结果不能因此丢失。
+    private static int WriteResults(Application app, BindingListener listener, string outDir,
+        List<KeyValuePair<string, object?>>? manifest, int exitCode, ref FrameworkElement? view)
+    {
+        listener.Flush();
+        PresentationTraceSources.DataBindingSource.Listeners.Remove(listener);
+        File.WriteAllLines(Path.Combine(outDir, "binding-errors.txt"), listener.Errors);
+        File.WriteAllText(Path.Combine(outDir, "binding-errors.json"), Json.Write(listener.Errors.Select(BindingIssues.Describe).ToList()));
+        if (exitCode == 0 && listener.Errors.Count > 0) exitCode = 2;
+        if (manifest is not null)
+        {
+            manifest.Add(new("bindingWarningOrErrorCount", listener.Errors.Count));
+            manifest.Add(new("exitCode", exitCode));
+            File.WriteAllText(Path.Combine(outDir, "manifest.json"), Json.Write(manifest));
+        }
+        Console.WriteLine($"{outDir} (exit={exitCode})");
+        try
+        {
+            if (view != null) ViewFactory.Cleanup(view);
+        }
+        catch (Exception ex)
+        {
+            File.AppendAllText(Path.Combine(outDir, "error.txt"), ex.ToString());
+            exitCode = 1;
+        }
+        // 不关闭窗口、不调用 Application.Shutdown（会关闭全部窗口并触发 Closing 中的确认对话框）：
+        // 只停止消息循环，随后由 Environment.Exit 结束进程。
+        app.Dispatcher.InvokeShutdown();
         return exitCode;
     }
 
@@ -339,6 +374,7 @@ internal static class Program
     {
         private readonly StringBuilder buffer = new();
         private readonly HashSet<string> seen = new(StringComparer.Ordinal);
+        public string Marker { get; } = marker;
         public List<string> Errors { get; } = new();
         public bool SelfCheckHit { get; private set; }
         public override void Write(string? message) { lock (buffer) buffer.Append(message); }
