@@ -83,6 +83,7 @@ $cases = @(
     @{ Name = 'preset'; Kind = 'Preset' }
     @{ Name = 'preset-merge'; Kind = 'PresetMerge' }
     @{ Name = 'logic-tests'; Kind = 'LogicTests' }
+    @{ Name = 'result-reader'; Kind = 'ResultReader' }
     @{ Name = 'steps-net8'; Kind = 'Steps'; Sample = 'net8' }
     @{ Name = 'steps-net472'; Kind = 'Steps'; Sample = 'net472' }
     @{ Name = 'steps-layout-only'; Kind = 'StepsLayoutOnly' }
@@ -409,8 +410,9 @@ function Test-Preset($case) {
     try { $null = & $oneStep -Config $dir -Preset Interactive -Theme light, dark -CacheRoot $cache 6> $null; $failures.Add('steps 与多主题同时使用应报错') }
     catch { if ($_.Exception.Message -notlike '*交互步骤不能*') { $failures.Add("steps 与多主题冲突的报错不明确：$($_.Exception.Message)") } }
     $themes = & $oneStep -Config $dir -Preset Themes -CacheRoot $cache 6> $null
-    $matrix = Get-Content -LiteralPath (Join-Path "$themes" 'matrix.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-    if ($matrix.rendered -ne 2) { $failures.Add("Themes 预设应渲染 2 个组合：$($matrix.rendered)") }
+    . (Join-Path $root 'scripts\Results.ps1')
+    $themesResult = try { Read-WpfRenderResult "$themes" } catch { $null }
+    if (-not $themesResult -or @($themesResult.items).Count -ne 2) { $failures.Add("Themes 预设应渲染 2 个组合：$(@($themesResult.items).Count)") }
     $null = & $oneStep -Config $dir -Preset Broken -CacheRoot $cache 6> $null
     if ($LASTEXITCODE -ne 2) { $failures.Add("Broken 预设应以退出码 2 报告绑定问题：$LASTEXITCODE") }
     try { $null = & $oneStep -Config $dir -Preset Missing -CacheRoot $cache 6> $null; $failures.Add('未知预设应报错') }
@@ -444,6 +446,36 @@ function Test-PresetMerge($case) {
     $file = Read-WpfRenderConfigFile (Join-Path $dir 'wpf-render.json')
     $merged = Merge-WpfRenderPreset $file 'Loose'
     if ($merged.xaml -ne $loose.xaml) { $failures.Add('Merge-WpfRenderPreset 与 list-views 的结果不一致') }
+    $failures
+}
+
+# Results.ps1（渲染结果读取的单一 module）：matrix 展开 / 单结果包装 / 缺文件与残缺 JSON 报错。
+function Test-ResultReader($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    . (Join-Path $root 'scripts\Results.ps1')
+    # 单结果：kind=render、items 长度 1。
+    $dir = Join-Path $ArtifactsDir "$($case.Name)-single"
+    $null = New-Item -ItemType Directory -Path $dir
+    Set-Content -LiteralPath (Join-Path $dir 'summary.json') -Value '{"status":"ok","snapshot":"s.png"}'
+    $single = Read-WpfRenderResult $dir
+    if ($single.kind -ne 'render' -or @($single.items).Count -ne 1 -or $single.items[0].status -ne 'ok') {
+        $failures.Add("单结果应包装为长度 1 的 items：$($single | ConvertTo-Json -Compress -Depth 3)")
+    }
+    # matrix：items 展开 results[]，raw 保留 overview 等元数据。
+    $dir = Join-Path $ArtifactsDir "$($case.Name)-matrix"
+    $null = New-Item -ItemType Directory -Path $dir
+    Set-Content -LiteralPath (Join-Path $dir 'matrix.json') -Value '{"status":"ok","overview":"o.png","results":[{"theme":"light"},{"theme":"dark"}]}'
+    $matrix = Read-WpfRenderResult $dir
+    if ($matrix.kind -ne 'matrix' -or @($matrix.items).Count -ne 2 -or $matrix.raw.overview -ne 'o.png') {
+        $failures.Add("matrix 应展开 results：$($matrix | ConvertTo-Json -Compress -Depth 3)")
+    }
+    # 缺文件与残缺 JSON 都要抛错。
+    $dir = Join-Path $ArtifactsDir "$($case.Name)-empty"
+    $null = New-Item -ItemType Directory -Path $dir
+    try { Read-WpfRenderResult $dir | Out-Null; $failures.Add('没有结果文件时应抛错') } catch { }
+    Set-Content -LiteralPath (Join-Path $dir 'summary.json') -Value '{broken'
+    try { Read-WpfRenderResult $dir | Out-Null; $failures.Add('残缺 JSON 应抛错') } catch { }
+    try { Read-WpfRenderResult (Join-Path $ArtifactsDir 'no-such-dir') | Out-Null; $failures.Add('目录不存在时应抛错') } catch { }
     $failures
 }
 

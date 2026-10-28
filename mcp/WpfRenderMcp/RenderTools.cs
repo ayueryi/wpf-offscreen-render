@@ -79,15 +79,15 @@ public sealed class RenderTools(ScriptRunner runner)
         arguments["Animations"] = animations;
         var result = await runner.RunAsync(Path.Combine("scripts", "render.ps1"), arguments, TimeSpan.FromMinutes(20), cancellationToken);
         if (LastOutput(result) is not { } outDir) return ScriptFailure(result);
-        // 预设可能配置了多个主题 / 尺寸 / DPI，此时得到的是汇总目录。
-        if (ReadJson(Path.Combine(outDir, "matrix.json")) is { } matrix)
+        // 结果形态（matrix / 单结果）的解析统一在 scripts/Results.ps1，本工具只消费统一的 items。
+        if (await ReadResultAsync(outDir, cancellationToken) is not { } read) return ScriptFailure(result);
+        if (read.kind == "matrix")
         {
-            var matrixContent = new List<ContentBlock> { Text(matrix) };
-            if (includeImage) AddImage(matrixContent, matrix["overview"]?.GetValue<string>(), "总览图");
-            return new CallToolResult { Content = matrixContent, IsError = matrix["status"]?.GetValue<string>() == "failed" };
+            var matrixContent = new List<ContentBlock> { Text(read.raw) };
+            if (includeImage) AddImage(matrixContent, read.raw["overview"]?.GetValue<string>(), "总览图");
+            return new CallToolResult { Content = matrixContent, IsError = read.raw["status"]?.GetValue<string>() == "failed" };
         }
-        if (ReadJson(Path.Combine(outDir, "summary.json")) is not { } summary) return ScriptFailure(result);
-
+        var summary = read.raw;
         var content = new List<ContentBlock> { Text(summary) };
         if (includeImage)
         {
@@ -153,21 +153,19 @@ public sealed class RenderTools(ScriptRunner runner)
         arguments["WindowHost"] = windowHost;
         var result = await runner.RunAsync(Path.Combine("scripts", "render.ps1"), arguments, TimeSpan.FromMinutes(30), cancellationToken);
         if (LastOutput(result) is not { } outDir) return ScriptFailure(result);
+        if (await ReadResultAsync(outDir, cancellationToken) is not { } read) return ScriptFailure(result);
 
-        // 只有一个组合时 render.ps1 返回普通渲染目录。
-        if (ReadJson(Path.Combine(outDir, "matrix.json")) is { } matrix)
+        // 只有一个组合时 render.ps1 返回普通渲染目录（kind=render），多组合时为汇总目录（kind=matrix）。
+        if (read.kind == "matrix")
         {
-            var content = new List<ContentBlock> { Text(matrix) };
-            if (includeImage) AddImage(content, matrix["overview"]?.GetValue<string>(), "总览图");
-            return new CallToolResult { Content = content, IsError = matrix["status"]?.GetValue<string>() == "failed" };
+            var content = new List<ContentBlock> { Text(read.raw) };
+            if (includeImage) AddImage(content, read.raw["overview"]?.GetValue<string>(), "总览图");
+            return new CallToolResult { Content = content, IsError = read.raw["status"]?.GetValue<string>() == "failed" };
         }
-        if (ReadJson(Path.Combine(outDir, "summary.json")) is { } summary)
-        {
-            var content = new List<ContentBlock> { Text(summary) };
-            if (includeImage) AddImage(content, summary["snapshot"]?.GetValue<string>(), "截图");
-            return new CallToolResult { Content = content, IsError = IsFailed(summary) };
-        }
-        return ScriptFailure(result);
+        var summary = read.raw;
+        var single = new List<ContentBlock> { Text(summary) };
+        if (includeImage) AddImage(single, summary["snapshot"]?.GetValue<string>(), "截图");
+        return new CallToolResult { Content = single, IsError = IsFailed(summary) };
     }
 
     [McpServerTool(Name = "compare_snapshots", Title = "Compare WPF snapshots", ReadOnly = false, Destructive = false, OpenWorld = false)]
@@ -281,6 +279,28 @@ public sealed class RenderTools(ScriptRunner runner)
 
     private static string? LastOutput(ScriptRunner.Result result) =>
         result.Error is null ? result.Output.LastOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim() : null;
+
+    // 结果形态的解析统一在 scripts/Results.ps1（与 hook、测试同源）。脚本失败时回退到本机直接读文件：
+    // 结果文件一定存在（渲染刚成功），回退只为不让一次桥接故障掩盖渲染结果。
+    private async Task<ReadResult?> ReadResultAsync(string outDir, CancellationToken cancellationToken)
+    {
+        var result = await runner.RunAsync(Path.Combine("scripts", "read-result.ps1"),
+            new Dictionary<string, object?> { ["OutDir"] = outDir }, TimeSpan.FromMinutes(1), cancellationToken);
+        if (result.Error is null && result.Output.Length > 0)
+        {
+            try
+            {
+                var json = JsonNode.Parse(string.Join("\n", result.Output));
+                if (json is not null) return new ReadResult(json["kind"]!.GetValue<string>(), json["raw"]!);
+            }
+            catch (JsonException) { }
+        }
+        if (ReadJson(Path.Combine(outDir, "matrix.json")) is { } matrix) return new ReadResult("matrix", matrix);
+        if (ReadJson(Path.Combine(outDir, "summary.json")) is { } summary) return new ReadResult("render", summary);
+        return null;
+    }
+
+    private sealed record ReadResult(string kind, JsonNode raw);
 
     private static JsonNode? ReadJson(string path)
     {

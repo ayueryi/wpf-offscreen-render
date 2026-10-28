@@ -105,12 +105,12 @@ foreach ($name in $affected | Sort-Object) {
     try {
         # 只保留管道输出（渲染目录）：警告等流在 -File 模式下会写到 stdout，混进 hook 的 JSON 输出。
         $outDir = & $render -Config $configPath -Preset $name -Build:$build 3> $null 4> $null 5> $null 6> $null
-        $resultPath = @('matrix.json', 'summary.json') | ForEach-Object { Join-Path "$outDir" $_ } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-        if (-not $resultPath) { $problems.Add("[$name] 没有得到渲染结果（$outDir）"); continue }
-        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-        $items = if ($result.results) { @($result.results) } else { @($result) }
-        $viewProblems = foreach ($item in $items) {
-            $label = if ($result.results) { "[$name $($item.theme) $($item.size) $($item.dpi)DPI]" } else { "[$name]" }
+        # 结果形态（matrix / 单结果）的解析统一在 Results.ps1。
+        . (Join-Path $PSScriptRoot '..\scripts\Results.ps1')
+        try { $result = Read-WpfRenderResult "$outDir" }
+        catch { $problems.Add("[$name] 没有得到渲染结果（$outDir）：$($_.Exception.Message)"); continue }
+        $viewProblems = foreach ($item in $result.items) {
+            $label = Get-WpfRenderItemLabel $result.raw $item $name
             if ("$($item.status)" -like 'failed*') {
                 "$label 渲染失败（$($item.status)）：$(@($item.buildErrors) + @($item.error) | Where-Object { $_ } | Select-Object -First 5 | Join-String -Separator '；')。输出目录 $($item.outDir)"
             }
