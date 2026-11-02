@@ -13,7 +13,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Themes.Fluent;
 using Avalonia.VisualTree;
 
-// Avalonia 11 宿主：Headless + Skia，用 RenderTargetBitmap 出图。
+// Avalonia 11 / 12 宿主：Headless + Skia，用 RenderTargetBitmap 出图。
 // 不用 CaptureRenderedFrame：它拍的是一块会留下历史脏区的帧缓冲，像素不稳定。
 // 结果文件与 WPF 宿主同一套：snapshot.png、manifest.json、layout.json、binding-errors.json。
 internal static class Program
@@ -138,7 +138,8 @@ internal static class Program
     private static Window HostInWindow(Control view, int width, int height)
     {
         var window = view as Window ?? new Window { Content = view };
-        window.SystemDecorations = SystemDecorations.None;
+        // 不设置窗口装饰：无头窗口不绘制原生边框，且 11 的 SystemDecorations 在 12 已移除；
+        // 实测设置与否输出逐字节一致，删掉即可让同一份源码同时编译 11 / 12。
         window.SizeToContent = SizeToContent.Manual;
         window.WindowState = WindowState.Normal;
         window.Width = width;

@@ -8,9 +8,9 @@
 *Give your agent eyes on WPF and Avalonia.*
 
 [![CI](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml/badge.svg)](https://github.com/ayueryi/wpf-offscreen-render/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-2.0.0-blue)
+![version](https://img.shields.io/badge/version-2.1.0-blue)
 ![WPF](https://img.shields.io/badge/WPF-.NET%20Framework%204.7.2%20%E2%80%93%20.NET%2010-512BD4)
-![Avalonia](https://img.shields.io/badge/Avalonia-11.x%20%2F%20.NET%208%2B-8B44AC)
+![Avalonia](https://img.shields.io/badge/Avalonia-11.x%20%2F%2012.x%20%2F%20.NET%208%2B-8B44AC)
 
 让 AI 编码代理（Antigravity、Codex、Claude Code 等）**改完就能看见**自己写出来的界面：在独立的临时进程里把真实的 WPF `UserControl` / `Page` / `Window` 或 Avalonia `Control` / 松散 AXAML 渲染成 PNG，并给出解析好的绑定错误和布局问题。
 
@@ -29,7 +29,7 @@
 - **为代理设计**：内置 MCP 服务器，作为 Antigravity / Claude Code / Codex 插件一条命令安装；代理调用一次即可拿到截图和 JSON 摘要。
 - **覆盖常见验证场景**：多主题 × 尺寸 × DPI 一次渲染并拼成总览图，修改前后像素对比，截取单个元素。
 - **交互步骤与动画取帧**：按顺序执行展开、输入、点击提交、切换 VisualState、执行命令等动作，每步截图并检查绑定与布局；动画按时刻（如 0 / 150 / 300 ms）取帧，结果可复现。
-- **兼容面广**：WPF 支持 .NET Framework 4.7.2 / 4.8 / 4.8.1 与 .NET 5 – 10，Avalonia 支持 11.x（.NET 8+），按业务程序集自动识别技术栈、宿主框架与位数（含 x86）。
+- **兼容面广**：WPF 支持 .NET Framework 4.7.2 / 4.8 / 4.8.1 与 .NET 5 – 10，Avalonia 支持 11.x / 12.x（.NET 8+），按业务程序集自动识别技术栈、宿主框架与位数（含 x86）。
 - **可以强制执行**：业务项目登记视图后，代理结束本轮回答前会自动渲染改动涉及的页面，有绑定错误时让代理继续修复。
 
 **适用范围**：只能在 **Windows** 上渲染（云端 Linux 容器中的代理会话用不了）。快照不包含 `Popup` / `ToolTip`、`HwndHost`、WebView 等原生内容，也不能证明性能；交互只覆盖能用代码确定性驱动的部分（见[交互步骤](references/steps.md#限制)，默认主题的鼠标悬停 / 按下样式截不到，拖拽、手势等真实输入不在范围内）。Avalonia 本期只支持初始截图、主题 / 尺寸 / DPI、绑定与布局检查、元素截图和快照对比，不支持 `windowHost` 与交互步骤，资源使用 `avares://`。不适用于 WinUI、UWP、MAUI。
@@ -278,7 +278,7 @@ $after = .\scripts\render.ps1 -AssemblyPath $ui -ViewType MyUi.Views.OrderView
 # 按业务项目的预设渲染（先执行预设中的构建命令）
 .\scripts\render.ps1 -Config C:\work\MyApp -Preset OrderList -Build
 
-# Avalonia：-Stack 可省略（按程序集引用自动识别），宿主自动使用 net8.0 + Avalonia 11.x
+# Avalonia：-Stack 可省略（按程序集引用自动识别），宿主按业务程序集选 net8.0+ TFM 与 Avalonia 12.x 包（11.x 程序集仍走 11.3.22）
 $out = .\scripts\render.ps1 -AssemblyPath $avaUi -ViewType MyUi.Views.OrderView -Stack avalonia -Theme light
 ```
 
@@ -292,7 +292,7 @@ $out = .\scripts\render.ps1 -AssemblyPath $avaUi -ViewType MyUi.Views.OrderView 
 | .NET SDK | 能构建目标框架的 SDK，例如 .NET 8 / 9 / 10 SDK（也能构建 .NET Framework 目标） |
 | 运行时 | WPF 的 .NET 宿主需要对应版本的 `Microsoft.WindowsDesktop.App`；.NET Framework 宿主需要对应版本的 .NET Framework（Windows 10 / 11 自带 4.8 / 4.8.1）；Avalonia 宿主需要 .NET 8+ 运行时（自带 Skia，无 WindowsDesktop 依赖） |
 | .NET Framework 引用程序集 | 已安装 Developer Pack，或可以访问 NuGet（SDK 会自动还原） |
-| 目标程序 | WPF：.NET Framework 4.7.2 / 4.8 / 4.8.1 或 .NET 5 – 10（更早的 .NET Framework 程序集用 net472 宿主）；Avalonia：11.x（.NET 8+）。不支持 .NET Core 3.x |
+| 目标程序 | WPF：.NET Framework 4.7.2 / 4.8 / 4.8.1 或 .NET 5 – 10（更早的 .NET Framework 程序集用 net472 宿主）；Avalonia：11.x / 12.x（.NET 8+）。不支持 .NET Core 3.x |
 
 自查：`dotnet --list-sdks`、`dotnet --list-runtimes | Select-String WindowsDesktop`、`$PSVersionTable.PSVersion`。
 

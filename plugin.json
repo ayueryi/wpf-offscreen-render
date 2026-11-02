@@ -1,6 +1,6 @@
 {
   "name": "agent-render",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "给 AI 一双看 WPF / Avalonia 的眼睛：离屏渲染真实 WPF / Avalonia / XAML 界面为 PNG，返回截图、绑定错误与布局问题，支持前后对比与多主题 / 尺寸 / DPI 组合（需要 Windows）。",
   "author": { "name": "ayueryi", "url": "https://github.com/ayueryi" },
   "homepage": "https://github.com/ayueryi/wpf-offscreen-render",

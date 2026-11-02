@@ -1,12 +1,18 @@
 #requires -Version 7.0
 # 技术栈判定与 Avalonia 宿主推断的单一 module。
 # 判定：显式 -Stack 优先；未指定时按程序集的 AssemblyRef 识别 Avalonia / WPF，两者同时出现则报错。
-# Avalonia 宿主：TFM 跟随业务程序集（不低于 net8.0），Avalonia 包版本不低于宿主基线、且不低于业务程序集引用的版本。
+# Avalonia 宿主：TFM 跟随业务程序集（不低于 net8.0）；包版本按业务程序集引用的主版本选基线，
+# 同一主版本内跟随更高的引用版本。
 . (Join-Path $PSScriptRoot 'HostFrameworks.ps1')
 
-# Avalonia 宿主默认钉住的 11.x 版本（不自动升到 12）。
-$script:AvaloniaHostBaselineVersion = [version]'11.3.22'
-$script:AvaloniaSupportedMajor = 11
+# 每个主版本钉一个已验证的包版本；未列出的主版本明确拒绝。
+# 12 已用 12.0.1 / 12.1.0 / 12.1.4 的真实业务视图验证，宿主源码同时兼容 11 / 12。
+$script:AvaloniaHostBaselines = [ordered]@{
+    '11' = [version]'11.3.22'
+    '12' = [version]'12.1.4'
+}
+# 没有业务程序集（纯松散 AXAML）时的默认主版本：跟随当前稳定版。
+$script:AvaloniaDefaultMajor = 12
 
 # 读取程序集的 AssemblyRef 名称与版本，不加载程序集。
 function Get-AssemblyReferences([string]$Path) {
@@ -80,16 +86,26 @@ function Get-AvaloniaHostInfo([string[]]$AssemblyPath, [string]$TargetFramework,
     }
     else { $Platform = if ($platforms.Count -eq 1) { $platforms[0] } else { 'AnyCPU' } }
 
-    # Avalonia 包版本：不低于基线；业务程序集引用了更新的 Avalonia.Base 时跟随它（同一 11.x 内向后兼容）。
-    $package = $script:AvaloniaHostBaselineVersion
-    foreach ($assembly in $AssemblyPath) {
-        $base = Get-AssemblyReferences $assembly | Where-Object Name -eq 'Avalonia.Base' | Select-Object -First 1
-        if (-not $base) { continue }
-        if ($base.Version.Major -ne $script:AvaloniaSupportedMajor) {
-            throw "$assembly 引用 Avalonia $($base.Version)：宿主只支持 Avalonia $($script:AvaloniaSupportedMajor).x。"
-        }
-        $referenced = [version]::new($base.Version.Major, $base.Version.Minor, [math]::Max($base.Version.Build, 0))
-        if ($referenced -gt $package) { $package = $referenced }
+    # Avalonia 包版本：按业务程序集引用的主版本选基线；同一主版本内跟随更高的引用版本。
+    $references = @(foreach ($assembly in $AssemblyPath) {
+            $base = Get-AssemblyReferences $assembly | Where-Object Name -eq 'Avalonia.Base' | Select-Object -First 1
+            if (-not $base) { continue }
+            [pscustomobject]@{
+                Path = $assembly
+                Version = [version]::new($base.Version.Major, $base.Version.Minor, [math]::Max($base.Version.Build, 0))
+            }
+        })
+    $majors = @($references | ForEach-Object { $_.Version.Major } | Select-Object -Unique)
+    if ($majors.Count -gt 1) {
+        throw "-AssemblyPath 同时引用了 Avalonia $(($majors | Sort-Object) -join ' 与 ').x（$($references.Path -join '、')）：一个宿主只能使用一个主版本，请分别渲染。"
+    }
+    $major = if ($majors.Count -eq 1) { "$($majors[0])" } else { "$($script:AvaloniaDefaultMajor)" }
+    if (-not $script:AvaloniaHostBaselines.Contains($major)) {
+        throw "宿主只支持 Avalonia $(($script:AvaloniaHostBaselines.Keys | Sort-Object) -join ' / ').x：业务程序集引用了 Avalonia $major.x。"
+    }
+    $package = $script:AvaloniaHostBaselines[$major]
+    foreach ($reference in $references) {
+        if ($reference.Version -gt $package) { $package = $reference.Version }
     }
     [pscustomobject]@{ TargetFramework = $TargetFramework; Platform = $Platform; AvaloniaVersion = $package.ToString() }
 }

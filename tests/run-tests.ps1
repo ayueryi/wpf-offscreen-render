@@ -808,22 +808,29 @@ function Test-StackRules($case) {
     if ((Get-AgentRenderStack @() $null) -ne 'wpf') { $failures.Add('没有程序集时默认 wpf') }
     try { $null = Get-AgentRenderStack @() 'winui'; $failures.Add('未知技术栈应报错') } catch { }
     $info = Get-AvaloniaHostInfo @() $null $null
-    if ($info.TargetFramework -ne 'net8.0' -or $info.AvaloniaVersion -notmatch '^11\.') { $failures.Add("默认宿主应为 net8.0 + Avalonia 11.x，实际 $($info.TargetFramework) / $($info.AvaloniaVersion)") }
+    if ($info.TargetFramework -ne 'net8.0' -or $info.AvaloniaVersion -ne '12.1.4') { $failures.Add("默认宿主应为 net8.0 + Avalonia 12.1.4，实际 $($info.TargetFramework) / $($info.AvaloniaVersion)") }
     try { $null = Get-AvaloniaHostInfo @() 'net8.0-windows' $null; $failures.Add('Avalonia 宿主不应接受 -windows TFM') } catch { }
     # 真实程序集的 AssemblyRef 判定（此前把 MetadataReader 的属性当方法调用，只有传入程序集时才会炸）。
     if ($samples['net8']) {
         $detected = Get-AgentRenderStack @($samples['net8']) $null
         if ($detected -ne 'wpf') { $failures.Add("WPF 样例程序集应判为 wpf，实际 $detected") }
     }
-    $avaloniaDll = Join-Path $HOME '.nuget\packages\avalonia\11.3.22\lib\net8.0\Avalonia.Controls.dll'
-    if (Test-Path -LiteralPath $avaloniaDll) {
-        $detected = Get-AgentRenderStack @($avaloniaDll) $null
-        if ($detected -ne 'avalonia') { $failures.Add("Avalonia 程序集应判为 avalonia，实际 $detected") }
-        $info = Get-AvaloniaHostInfo @($avaloniaDll) $null $null
-        if ($info.TargetFramework -ne 'net8.0') { $failures.Add("Avalonia 程序集的宿主 TFM 期望 net8.0，实际 $($info.TargetFramework)") }
-        if ($samples['net8']) {
-            try { $null = Get-AgentRenderStack @($avaloniaDll, $samples['net8']) $null; $failures.Add('WPF 与 Avalonia 混合引用应报错') } catch { }
-        }
+    # 11 / 12 双档：两代程序集各自选中对应基线；混引必须报错。
+    $avalonia11 = Join-Path $HOME '.nuget\packages\avalonia\11.3.22\lib\net8.0\Avalonia.Controls.dll'
+    $avalonia12 = Join-Path $HOME '.nuget\packages\avalonia\12.1.4\lib\net8.0\Avalonia.Controls.dll'
+    foreach ($row in @(@($avalonia11, '11.3.22'), @($avalonia12, '12.1.4'))) {
+        if (-not (Test-Path -LiteralPath $row[0])) { continue }
+        $detected = Get-AgentRenderStack @($row[0]) $null
+        if ($detected -ne 'avalonia') { $failures.Add("Avalonia $($row[1]) 程序集应判为 avalonia，实际 $detected") }
+        $info = Get-AvaloniaHostInfo @($row[0]) $null $null
+        if ($info.TargetFramework -ne 'net8.0') { $failures.Add("Avalonia $($row[1]) 程序集的宿主 TFM 期望 net8.0，实际 $($info.TargetFramework)") }
+        if ($info.AvaloniaVersion -ne $row[1]) { $failures.Add("Avalonia $($row[1]) 程序集的宿主包版本期望 $($row[1])，实际 $($info.AvaloniaVersion)") }
+    }
+    if ((Test-Path -LiteralPath $avalonia11) -and (Test-Path -LiteralPath $avalonia12)) {
+        try { $null = Get-AvaloniaHostInfo @($avalonia11, $avalonia12) $null $null; $failures.Add('Avalonia 11 与 12 混引应报错') } catch { }
+    }
+    if ((Test-Path -LiteralPath $avalonia12) -and $samples['net8']) {
+        try { $null = Get-AgentRenderStack @($avalonia12, $samples['net8']) $null; $failures.Add('WPF 与 Avalonia 混合引用应报错') } catch { }
     }
     $failures
 }

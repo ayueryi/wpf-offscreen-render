@@ -2,6 +2,21 @@
 
 版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`plugin.json`、`mcp/AgentRender/AgentRender.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
 
+## 2.1.0 – 2026-11-02
+
+### Avalonia 12 支持（11 / 12 双档）
+- 宿主按业务程序集引用的 `Avalonia.Base` 主版本选基线：11 → 11.3.22，12 → 12.1.4；同一主版本内跟随更高的引用版本。
+- 没有业务程序集（纯松散 AXAML）时默认 12.1.4；11.x 程序集仍走 11.3.22。
+- 业务程序集同时引用 11 与 12 时报错，请分别渲染；未列出的主版本明确拒绝。
+- 宿主删除 `Window.SystemDecorations` 赋值（12 已移除该 API；无头窗口不绘制原生边框，实测设置与否输出逐字节一致），同一份源码同时编译 11 / 12。
+- 修复 `cache-cleanup` 用例仍持有改名前的 `Local\wpf-render-*` 互斥量而误报缓存被删除的问题。
+
+### 检查
+- 完整回归：47 通过，0 失败。
+- 12.1.4 宿主：松散 AXAML、绑定错误、元素截图、按钮模板像素。
+- 真实视图：tinyimage（12.1.4）、slave-in3（12.1.0）、slave-opt（12.0.1）均渲染成功。
+- 11 与 12 同一样例像素一致；net8.0 与 net10.0 输出一致。
+
 ## 2.0.0 – 2026-11-02
 
 ### Agent Render 多技术栈宿主

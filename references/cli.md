@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | `-TargetFramework` | string | 自动 | `net472` / `net48` / `net481`，或 `net5.0-windows` … `net10.0-windows`（可带平台版本，如 `net8.0-windows10.0.19041.0`）。省略时读取 `-AssemblyPath` 的 `TargetFrameworkAttribute`：取同类中最高版本，低于 4.7.2 的 .NET Framework 程序集用 `net472`；没有业务程序集时为 `net8.0-windows`。显式指定但与业务程序集不兼容（类别不同或版本更低）时报错 |
 | `-Platform` | string | 自动 | `AnyCPU` / `x86` / `x64` / `ARM64`，写入 `PlatformTarget`。省略时读取 `-AssemblyPath` 的 PE 头：存在 x86 程序集（含 C++/CLI 混合程序集与“首选 32 位”的 exe）或 x64 / ARM64 程序集就跟随它，否则 `AnyCPU`；要求冲突时报错 |
-| `-Stack` | string | 自动 | `wpf` / `avalonia`。省略时按程序集引用识别；两者混引、未知值或 Avalonia 程序集面向 .NET Framework 时报错。Avalonia 宿主使用不带 `-windows` 的 net8.0 及以上 TFM，跟随业务程序集的 Avalonia 11.x 版本（不低于 11.3.22） |
+| `-Stack` | string | 自动 | `wpf` / `avalonia`。省略时按程序集引用识别；两者混引、未知值或 Avalonia 程序集面向 .NET Framework 时报错。Avalonia 宿主使用不带 `-windows` 的 net8.0 及以上 TFM，按业务程序集的 Avalonia 主版本选基线（11 → 11.3.22，12 → 12.1.4），同一主版本内跟随更高的引用版本；没有业务程序集时默认 12.1.4 |
 | `-WorkDir` | string | `%TEMP%\agent-render-<GUID>` | 工程目录；**已存在则拒绝覆盖** |
 | `-AssemblyPath` | string[] | 空 | 要引用的业务程序集（`.dll`，或 .NET Framework WPF 程序的 `.exe`）；以 `HintPath` + `Private=true` 写入 csproj（路径做 XML 转义，可含空格）。.NET Framework 与 .NET 程序集不能混用 |
 | `-ViewType` | string | 空 | 要渲染的 View 类型（完整名或程序集限定名），需有无参构造；与 `-Xaml` 二选一 |
@@ -28,7 +28,7 @@
 
 相对路径（`-WorkDir`、`-AssemblyPath`、`-Xaml` 等）按 PowerShell 当前位置解析，UNC 路径可直接使用。视图参数写入 `harness.json`，渲染时才读取；之后修改它或 XAML 文件只需 `-NoBuild` 重新渲染。工程同时写入空的 `Directory.Build.props` / `.targets`、关闭集中包管理的 `Directory.Packages.props` 与空的 `global.json`，放在业务仓库里也不会继承上层构建配置。`dotnet` 按**当前目录**查找 `global.json`，`invoke-agent-render.ps1` 因此在宿主目录内执行构建，业务仓库锁定的 SDK 版本不影响宿主。
 
-生成的 csproj 关键属性：`OutputType=Exe`、`ImplicitUsings`、`Nullable`、`LangVersion=latest`、`PlatformTarget`；WPF 宿主另有 `UseWPF=true`，Avalonia 宿主引用 `Avalonia` / `Avalonia.Headless` / `Avalonia.Skia` 等 11.x 包。启动方式由 TFM 和位数决定：
+生成的 csproj 关键属性：`OutputType=Exe`、`ImplicitUsings`、`Nullable`、`LangVersion=latest`、`PlatformTarget`；WPF 宿主另有 `UseWPF=true`，Avalonia 宿主引用 `Avalonia` / `Avalonia.Headless` / `Avalonia.Skia` 等 11.x / 12.x 包。启动方式由 TFM 和位数决定：
 
 | 宿主 | 启动方式 |
 | --- | --- |
@@ -94,7 +94,7 @@ WPF 宿主源码只使用 .NET Framework 4.7.2 与 .NET 5+ 共有的 API（不�
 
 ### Avalonia 宿主
 
-`-Stack avalonia`（或按程序集引用自动识别）时，宿主使用 Avalonia 11.x Headless + Skia，TFM 为不带 `-windows` 的 net8.0 及以上。当前支持类型视图、松散 AXAML、DataContext、主题 / 尺寸 / DPI、绑定错误、布局检查、元素截图与 `compare_snapshots`；`layout.json` 的节点、坐标与五类布局问题与 WPF 契约一致。`-WindowHost` 直接失败（`failed:render`，退出码 1），`-Steps` 返回 `failed:step`（退出码 3），不会静默忽略。资源使用 `avares://` 或文件路径，不接受 WPF 的 `pack://`。
+`-Stack avalonia`（或按程序集引用自动识别）时，宿主使用 Avalonia 11.x / 12.x Headless + Skia，TFM 为不带 `-windows` 的 net8.0 及以上。当前支持类型视图、松散 AXAML、DataContext、主题 / 尺寸 / DPI、绑定错误、布局检查、元素截图与 `compare_snapshots`；`layout.json` 的节点、坐标与五类布局问题与 WPF 契约一致。`-WindowHost` 直接失败（`failed:render`，退出码 1），`-Steps` 返回 `failed:step`（退出码 3），不会静默忽略。资源使用 `avares://` 或文件路径，不接受 WPF 的 `pack://`。
 
 ### `scripts/trust-project.ps1`
 
