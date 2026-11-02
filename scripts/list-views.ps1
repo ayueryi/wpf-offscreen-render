@@ -15,13 +15,14 @@ foreach ($name in @($file.views.Keys | Sort-Object)) {
     $merged = Merge-WpfRenderPreset $file $name
     $view = [ordered]@{
         name = $name
+        stack = if ($merged.stack) { $merged.stack } else { 'auto' }
         viewType = $merged.viewType; xaml = $merged.xaml
         themes = $merged.themes; sizes = $merged.sizes; dpis = $merged.dpis
         watch = $merged.watch; hasBuild = $null -ne $merged.build
     }
     # xaml 的相对路径解析为相对配置文件所在目录（pack URI 等保持原样），与渲染时一致；viewType 是类型名，不解析。
     if ($view.xaml -is [string]) {
-        $view.xaml = if ([IO.Path]::IsPathRooted($view.xaml) -or $view.xaml -like '*;component/*' -or $view.xaml -match '^(pack|file|https?)://') {
+        $view.xaml = if ([IO.Path]::IsPathRooted($view.xaml) -or $view.xaml -like '*;component/*' -or $view.xaml -match '^(pack|avares|file|https?)://') {
             $view.xaml
         } else { [IO.Path]::GetFullPath((Join-Path $configDir $view.xaml)) }
     }

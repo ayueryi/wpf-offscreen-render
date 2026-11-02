@@ -9,7 +9,7 @@ on:
 
 jobs:
   render-tests:
-    # WPF 只能在 Windows 上渲染；托管 Windows 运行器自带 .NET Framework 4.8，可覆盖 .NET Framework 宿主。
+    # WPF 与 Avalonia 宿主目前都只在 Windows 上验收；托管 Windows 运行器自带 .NET Framework 4.8，可覆盖 .NET Framework 宿主。
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -23,7 +23,7 @@ jobs:
 
       - name: Run render tests
         shell: pwsh
-        run: ./tests/run-tests.ps1 -ArtifactsDir "${{ runner.temp }}\wpf-render-tests"
+        run: ./tests/run-tests.ps1 -ArtifactsDir "${{ runner.temp }}\agent-render-tests"
 
       - name: MCP under AllSigned execution policy
         # 模拟公司策略 / 带“来自网络”标记的安装：未签名脚本只有在启动参数带 -ExecutionPolicy Bypass 时才能运行。
@@ -32,7 +32,7 @@ jobs:
           Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy AllSigned -Force
           $effective = Get-ExecutionPolicy
           if ($effective -ne 'AllSigned') { throw "生效的执行策略是 $effective，无法验证 AllSigned 场景" }
-          dotnet run --project mcp/WpfRenderMcp.Tests -c Release -- --root .
+          dotnet run --project mcp/AgentRender.Tests -c Release -- --root .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload render artifacts
@@ -41,8 +41,8 @@ jobs:
         with:
           name: render-artifacts
           path: |
-            ${{ runner.temp }}/wpf-render-tests/**/render-*/
-            ${{ runner.temp }}/wpf-render-tests/*.log
+            ${{ runner.temp }}/agent-render-tests/**/render-*/
+            ${{ runner.temp }}/agent-render-tests/*.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -59,7 +59,7 @@ jobs:
 
       - name: Run MCP protocol tests
         shell: pwsh
-        run: dotnet run --project mcp/WpfRenderMcp.Tests -c Release -- --root .
+        run: dotnet run --project mcp/AgentRender.Tests -c Release -- --root .
 
       - name: Check plugin manifests consistency
         shell: pwsh
@@ -88,4 +88,4 @@ jobs:
 
       - name: Run MCP protocol tests
         shell: pwsh
-        run: dotnet run --project mcp/WpfRenderMcp.Tests -c Release -- --root .
+        run: dotnet run --project mcp/AgentRender.Tests -c Release -- --root .

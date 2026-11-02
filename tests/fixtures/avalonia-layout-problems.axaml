@@ -1,0 +1,11 @@
+<Canvas xmlns="https://github.com/avaloniaui" Width="400" Height="200" Background="White">
+  <TextBlock Name="TruncatedTitle" Text="This is a very long title that cannot fit" Width="120" TextWrapping="NoWrap" Canvas.Left="10" Canvas.Top="10" />
+  <TextBlock Name="OverlapA" Text="Overlapping text A" Canvas.Left="10" Canvas.Top="60" />
+  <TextBlock Name="OverlapB" Text="Overlapping text B" Canvas.Left="14" Canvas.Top="62" />
+  <TextBlock Name="OffscreenNote" Text="Off screen note" Canvas.Left="360" Canvas.Top="150" />
+  <TextBlock Name="ZeroSizeText" Text="hidden" Width="0" Canvas.Left="200" Canvas.Top="20" />
+  <Button Name="OkButton" Content="OK" Canvas.Left="10" Canvas.Top="110" Width="100" Height="36" />
+  <Border Name="ClipBox" ClipToBounds="True" Width="80" Height="30" Canvas.Left="200" Canvas.Top="110">
+    <Button Name="ClippedButton" Content="Wide button content" Width="160" Height="30" />
+  </Border>
+</Canvas>

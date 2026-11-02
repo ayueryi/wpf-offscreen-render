@@ -1,10 +1,10 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-    将 wpf-offscreen-render 安装到 Antigravity（配置 MCP 服务器与 Skill）。
+    将 agent-render 安装到 Antigravity（配置 MCP 服务器与 Skill）。
 
 .DESCRIPTION
-    将 wpf-offscreen-render 注册为 Antigravity 的 MCP 工具服务与 Agent Skill。
+    将 agent-render 注册为 Antigravity 的 MCP 工具服务与 Agent Skill。
     支持全局安装（~/.gemini/config/）或指定工作区安装。
 
 .PARAMETER Scope
@@ -14,7 +14,7 @@
     当 Scope 为 Workspace 时，指定工作区根目录路径；默认为当前目录。
 
 .PARAMETER Uninstall
-    卸载 Antigravity 中的 wpf-offscreen-render 配置与 Skill 链接。
+    卸载 Antigravity 中的 agent-render 配置与 Skill 链接。
 
 .PARAMETER Test
     安装/配置完成后执行快速自检（run-tests.ps1 -Quick）。
@@ -55,24 +55,24 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
 if (-not $IsWindows) {
-    throw "wpf-offscreen-render 只能在 Windows 操作系统上运行。"
+    throw "agent-render 只能在 Windows 操作系统上运行。"
 }
 
 $geminiConfigDir = Join-Path $HOME '.gemini\config'
 $globalMcpConfig = Join-Path $geminiConfigDir 'mcp_config.json'
 $globalSkillsDir = Join-Path $geminiConfigDir 'skills'
-$globalSkillTarget = Join-Path $globalSkillsDir 'wpf-offscreen-render'
-$sourceSkillDir = Join-Path $root 'skills\wpf-offscreen-render'
+$globalSkillTarget = Join-Path $globalSkillsDir 'agent-render'
+$sourceSkillDir = Join-Path $root 'skills\agent-render'
 $startScriptPath = (Join-Path $root 'mcp\start.ps1') -replace '\\', '/'
 
 # 安装 / 卸载的配置读写与 skill 挂载逻辑在 AntigravityInstall.ps1（安装与卸载共用，测试直测这两个 module）。
 . (Join-Path $PSScriptRoot 'AntigravityInstall.ps1')
 
 if ($Uninstall) {
-    Write-Host "正在从 Antigravity 卸载 wpf-offscreen-render ..." -ForegroundColor Cyan
+    Write-Host "正在从 Antigravity 卸载 agent-render ..." -ForegroundColor Cyan
 
     Set-McpServerEntry $globalMcpConfig $false $startScriptPath
-    Write-Host "已从 $globalMcpConfig 移除 wpf-offscreen-render MCP 服务器配置。" -ForegroundColor Green
+    Write-Host "已从 $globalMcpConfig 移除 agent-render MCP 服务器配置。" -ForegroundColor Green
 
     if (Test-Path -LiteralPath $globalSkillTarget) {
         Unmount-Skill $globalSkillTarget
@@ -80,7 +80,7 @@ if ($Uninstall) {
     }
 
     if ($WorkspacePath) {
-        $wsSkillTarget = Join-Path $WorkspacePath '.agents\skills\wpf-offscreen-render'
+        $wsSkillTarget = Join-Path $WorkspacePath '.agents\skills\agent-render'
         if (Test-Path -LiteralPath $wsSkillTarget) {
             Unmount-Skill $wsSkillTarget
             Write-Host "已移除工作区 Skill 链接：$wsSkillTarget" -ForegroundColor Green
@@ -98,7 +98,7 @@ if (-not $dotnetVersion) {
 }
 $major = [int]($dotnetVersion -split '\.')[0]
 if ($major -lt 8) {
-    throw "检测到 .NET SDK 版本为 $dotnetVersion，wpf-offscreen-render MCP 服务器需要 .NET 8 或更高版本的 SDK。"
+    throw "检测到 .NET SDK 版本为 $dotnetVersion，agent-render MCP 服务器需要 .NET 8 或更高版本的 SDK。"
 }
 
 Write-Host "检测到 .NET SDK: $dotnetVersion" -ForegroundColor Gray
@@ -118,7 +118,7 @@ if ($Scope -eq 'Global') {
     Write-Host "正在为工作区配置 Antigravity Skill：$targetWs ..." -ForegroundColor Cyan
 
     $wsSkillsDir = Join-Path $targetWs '.agents\skills'
-    $wsSkillTarget = Join-Path $wsSkillsDir 'wpf-offscreen-render'
+    $wsSkillTarget = Join-Path $wsSkillsDir 'agent-render'
 
     $mode = Mount-Skill $wsSkillTarget $sourceSkillDir
     Write-Host "已$(if ($mode -eq 'junction') { '创建工作区 Skill 联接' } else { '复制工作区 Skill 目录' })：$wsSkillTarget -> $sourceSkillDir" -ForegroundColor Green
@@ -134,4 +134,4 @@ if ($Test) {
 }
 
 Write-Host "`nAntigravity 安装配置成功！" -ForegroundColor Green
-Write-Host "提示：如需在业务项目中开启任务结束前自动检查，可在项目根目录配置 wpf-render.json 并参考 templates/antigravity-hooks.json。" -ForegroundColor Gray
+Write-Host "提示：如需在业务项目中开启任务结束前自动检查，可在项目根目录配置 agent-render.json 并参考 templates/antigravity-hooks.json。" -ForegroundColor Gray

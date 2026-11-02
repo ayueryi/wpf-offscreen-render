@@ -1,6 +1,6 @@
 #requires -Version 7.0
 # 宿主 TFM 与位数推断的单一 module（语义只在这一处定义）。
-# 从 new-wpf-harness.ps1 抽出：宿主能否加载业务程序集取决于这段规则（net4x 三段版本回落、
+# 从 new-agent-harness.ps1 抽出：宿主能否加载业务程序集取决于这段规则（net4x 三段版本回落、
 # I386+ILOnly-Requires32Bit→AnyCPU、Framework 与 Core 不得混载），它值得独立测试——
 # 以前只能靠三个 fixtures 变体跑完整渲染间接验证。
 

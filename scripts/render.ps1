@@ -1,18 +1,19 @@
 #requires -Version 7.0
 # 一步渲染：生成（或复用缓存的）宿主工程并渲染，最后输出 summary JSON。
-# 适合免代码接入（-ViewType / -Xaml）；需要定制 ViewFactory.cs 时改用 new-wpf-harness.ps1 + invoke-wpf-render.ps1。
+# 适合免代码接入（-ViewType / -Xaml）；需要定制 ViewFactory.cs 时改用 new-agent-harness.ps1 + invoke-agent-render.ps1。
 #
-# 缓存：同一组 程序集路径 + TFM + 位数 + 工具版本 复用 %TEMP%\wpf-render-cache 下的同一个宿主。
+# 缓存：同一组 程序集路径 + TFM + 位数 + 工具版本 复用 %TEMP%\agent-render-cache 下的同一个宿主。
 # 视图配置每次重写 harness.json；业务程序集的大小 / 修改时间未变时跳过构建，变化时重新构建。
 #
 # 多组合：-Theme / -Dpi / -Size 传多个值时渲染全部组合（只构建一次，每个组合独立进程），
 # 输出 matrix-* 目录，内含 matrix.json 与拼好的 overview.png；返回该目录。
 #
-# 预设：-Preset 从业务仓库的 wpf-render.json 读取视图配置（-Config 指定文件或目录，省略时从当前目录向上查找），
+# 预设：-Preset 从业务仓库的 agent-render.json（兼容旧 wpf-render.json）读取视图配置（-Config 指定文件或目录，省略时从当前目录向上查找），
 # 显式传入的参数优先；-Build 先在配置文件所在目录执行其 build 命令。
 [CmdletBinding()]
 param(
     [string[]]$AssemblyPath = @(),
+    [ValidateSet('wpf', 'avalonia')][string]$Stack,
     [string]$ViewType,
     [string]$Xaml,
     [string]$DataContextType,
@@ -40,8 +41,8 @@ param(
     [switch]$ContinueOnError,
     [ValidateSet('live', 'settle')][string]$Animations = 'live',
     [int]$TimeoutSeconds = 120,
-    [string]$CacheRoot = (Join-Path ([IO.Path]::GetTempPath()) 'wpf-render-cache'),
-    # 忽略缓存，生成一次性宿主（位于 %TEMP%\wpf-render-<GUID>）。
+    [string]$CacheRoot = (Join-Path ([IO.Path]::GetTempPath()) 'agent-render-cache'),
+    # 忽略缓存，生成一次性宿主（位于 %TEMP%\agent-render-<GUID>）。
     [switch]$NoCache,
     # 超过该天数未使用的缓存宿主与渲染结果会被清理。
     [ValidateRange(1, 365)][int]$RetentionDays = 7
@@ -60,9 +61,9 @@ if ($Preset -or $Config -or $Build) {
     $settings = Merge-WpfRenderPreset $presetFile $Preset
 
     # 相对路径相对于配置文件所在目录；pack URI（/Asm;component/...）、其他 URI 与绝对路径保持原样。
-    $resolve = { param($value) if ([IO.Path]::IsPathRooted($value) -or $value -like '*;component/*' -or $value -match '^(pack|file|https?)://') { $value } else { [IO.Path]::GetFullPath((Join-Path $configDir $value)) } }
+    $resolve = { param($value) if ([IO.Path]::IsPathRooted($value) -or $value -like '*;component/*' -or $value -match '^(pack|avares|file|https?)://') { $value } else { [IO.Path]::GetFullPath((Join-Path $configDir $value)) } }
     $mapping = [ordered]@{
-        assemblyPaths = 'AssemblyPath', $true; viewType = 'ViewType', $false; xaml = 'Xaml', $true; dataContextType = 'DataContextType', $false
+        stack = 'Stack', $false; assemblyPaths = 'AssemblyPath', $true; viewType = 'ViewType', $false; xaml = 'Xaml', $true; dataContextType = 'DataContextType', $false
         dataContextFactory = 'DataContextFactory', $false; factoryFile = 'FactoryFile', $true; resourceDictionaries = 'ResourceDictionary', $true
         targetFramework = 'TargetFramework', $false; platform = 'Platform', $false; themes = 'Theme', $false; sizes = 'Size', $false; dpis = 'Dpi', $false
         width = 'Width', $false; height = 'Height', $false; background = 'Background', $false; windowHost = 'WindowHost', $false; element = 'Element', $false
@@ -89,7 +90,7 @@ if ($Preset -or $Config -or $Build) {
         # build 为参数数组（不经过 shell），如 ["dotnet", "build", "src/MyApp/MyApp.csproj", "-c", "Debug"]。
         $command = @($settings.build)
         if (-not $command -or -not $command[0]) { throw "$Config 没有为 $Preset 配置 build 命令。" }
-        $buildLog = Join-Path ([IO.Path]::GetTempPath()) ('wpf-render-build-' + [guid]::NewGuid().ToString('N') + '.log')
+        $buildLog = Join-Path ([IO.Path]::GetTempPath()) ('agent-render-build-' + [guid]::NewGuid().ToString('N') + '.log')
         Push-Location -LiteralPath $configDir
         # 先清零：build 是 .ps1 脚本时在当前进程中运行，不一定设置 $LASTEXITCODE，会沿用上一次渲染的退出码。
         $global:LASTEXITCODE = 0
@@ -109,16 +110,21 @@ if (($DataContextType -or $DataContextFactory) -and -not ($ViewType -or $Xaml)) 
 if ($Xaml) { $Xaml = (Resolve-Path -LiteralPath $Xaml).ProviderPath }
 if ($FactoryFile) { $FactoryFile = (Resolve-Path -LiteralPath $FactoryFile).ProviderPath }
 $assemblies = @($AssemblyPath | ForEach-Object { (Resolve-Path -LiteralPath $_).ProviderPath })
+. (Join-Path $PSScriptRoot 'Stack.ps1')
+$Stack = Get-AgentRenderStack $assemblies $Stack
+if ($Stack -eq 'avalonia' -and @($ResourceDictionary | Where-Object { $_ -match '^pack:' }).Count -gt 0) {
+    throw 'Avalonia 不支持 WPF pack:// 资源字典，请改用 avares:// 或文件路径。'
+}
 # 资源字典：pack URI 与绝对路径保持原样；存在的相对路径按当前位置解析（{theme} 按 light 检查）。
 $ResourceDictionary = @($ResourceDictionary | ForEach-Object {
-        if ([IO.Path]::IsPathRooted($_) -or $_ -like '*;component/*' -or $_ -match '^(pack|file|https?)://' -or
+        if ([IO.Path]::IsPathRooted($_) -or $_ -like '*;component/*' -or $_ -match '^(pack|avares|file|https?)://' -or
             -not (Test-Path -LiteralPath $_.Replace('{theme}', 'light'))) { $_ }
         else { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($_) }
     })
 
-$generator = Join-Path $PSScriptRoot 'new-wpf-harness.ps1'
-$renderer = Join-Path $PSScriptRoot 'invoke-wpf-render.ps1'
-$generate = @{ AssemblyPath = $assemblies; ViewType = $ViewType; Xaml = $Xaml; DataContextType = $DataContextType; DataContextFactory = $DataContextFactory
+$generator = Join-Path $PSScriptRoot 'new-agent-harness.ps1'
+$renderer = Join-Path $PSScriptRoot 'invoke-agent-render.ps1'
+$generate = @{ AssemblyPath = $assemblies; Stack = $Stack; ViewType = $ViewType; Xaml = $Xaml; DataContextType = $DataContextType; DataContextFactory = $DataContextFactory
     ResourceDictionary = $ResourceDictionary; FactoryFile = $FactoryFile; Steps = $Steps; ContinueOnError = $ContinueOnError; Animations = $Animations }
 if ($TargetFramework) { $generate.TargetFramework = $TargetFramework }
 if ($Platform) { $generate.Platform = $Platform }
@@ -131,7 +137,7 @@ $combos = @(foreach ($s in $sizes) { foreach ($t in $Theme) { foreach ($d in $Dp
             } } })
 if ($combos.Count -eq 0) { throw '没有可渲染的组合：-Theme / -Dpi / -Size（或预设的 themes / dpis / sizes）不能为空。' }
 . (Join-Path $PSScriptRoot 'Steps.ps1')
-$normalizedSteps = @(ConvertTo-HarnessSteps $Steps $FactoryFile)
+$normalizedSteps = @(ConvertTo-HarnessSteps $Steps $FactoryFile $Stack)
 if ($normalizedSteps.Count -gt 0 -and $combos.Count -gt 1) {
     throw "交互步骤不能与多个主题 / 尺寸 / DPI 同时使用（当前 $($combos.Count) 个组合）：请对每个组合分别渲染。"
 }
@@ -140,15 +146,16 @@ if ($normalizedSteps.Count -gt 0 -and $combos.Count -gt 1) {
 function Invoke-Combos([string]$HarnessDir, [bool]$SkipBuild) {
     if ($combos.Count -eq 1) {
         $c = $combos[0]
-        $out = & $renderer -HarnessDir $HarnessDir -NoBuild:$SkipBuild -Theme $c.Theme -Width $c.Width -Height $c.Height -Dpi $c.Dpi @render
+        $out = & $renderer -HarnessDir $HarnessDir -NoBuild:$SkipBuild -Theme $c.Theme -Width $c.Width -Height $c.Height -Dpi $c.Dpi -Stack $Stack @render
         return [pscustomobject]@{ OutDir = "$out"; ExitCode = $LASTEXITCODE; Matrix = $false }
     }
     $results = foreach ($c in $combos) {
-        $out = & $renderer -HarnessDir $HarnessDir -NoBuild:$SkipBuild -Theme $c.Theme -Width $c.Width -Height $c.Height -Dpi $c.Dpi @render 6> $null
+        $out = & $renderer -HarnessDir $HarnessDir -NoBuild:$SkipBuild -Theme $c.Theme -Width $c.Width -Height $c.Height -Dpi $c.Dpi -Stack $Stack @render 6> $null
         $code = $LASTEXITCODE
         $SkipBuild = $true
         $summary = Get-Content -LiteralPath (Join-Path "$out" 'summary.json') -Raw | ConvertFrom-Json
         [pscustomobject]@{
+            stack = if ($summary.stack) { $summary.stack } else { 'wpf' }
             theme = $c.Theme; size = "$($c.Width)x$($c.Height)"; dpi = $c.Dpi; status = $summary.status; exitCode = $code
             bindingTraceVerified = $summary.bindingTraceVerified
             snapshot = $summary.snapshot; bindingIssueCount = $summary.bindingIssueCount; layoutIssueCount = $summary.layoutIssueCount
@@ -192,12 +199,13 @@ if ($NoCache) {
 
 # 缓存键、构建戳与过期清理在 Cache.ps1 中统一维护。
 . (Join-Path $PSScriptRoot 'Cache.ps1')
-$key = Get-WpfRenderCacheKey $generator (Join-Path $PSScriptRoot '..\assets') $TargetFramework $Platform "$FactoryFile" $assemblies
+$assetDirs = @((Join-Path $PSScriptRoot "..\assets\$Stack"), (Join-Path $PSScriptRoot '..\assets\shared'))
+$key = Get-WpfRenderCacheKey $generator $assetDirs $TargetFramework $Platform "$FactoryFile" $assemblies
 $workDir = Join-Path $CacheRoot $key
 $null = New-Item -ItemType Directory -Path $CacheRoot -Force
 
 # 同一缓存宿主同一时间只允许一个渲染，避免并发构建写同一个 out\。
-$mutex = [Threading.Mutex]::new($false, "Local\wpf-render-$key")
+$mutex = [Threading.Mutex]::new($false, "Local\agent-render-$key")
 try {
     # 持有者可能在构建并渲染多个组合（每个最长 TimeoutSeconds），等待上限按 16 个组合加构建时间估算。
     try { if (-not $mutex.WaitOne([TimeSpan]::FromSeconds(($TimeoutSeconds + 60) * 16 + 900))) { throw "等待缓存宿主超时：$workDir（另一个渲染长时间占用）" } }
@@ -208,7 +216,7 @@ try {
     if (Test-Path -LiteralPath $stampPath) { (Get-Item -LiteralPath $stampPath).LastWriteTime = Get-Date }
     # 构建会连同依赖一起复制，所以记录业务程序集所在目录中全部 dll / exe 的大小与修改时间；
     # ViewFactory.cs 编进宿主：内容变化时需要重新构建。
-    $factorySource = if ($FactoryFile) { $FactoryFile } else { Join-Path $PSScriptRoot '..\assets\ViewFactory.cs' }
+    $factorySource = if ($FactoryFile) { $FactoryFile } else { Join-Path $PSScriptRoot "..\assets\$Stack\ViewFactory.cs" }
     $stamps = Get-WpfRenderBuildStamps $assemblies $factorySource
     $noBuild = $false
     $projectPath = Join-Path $workDir 'RenderHarness.csproj'
@@ -219,7 +227,10 @@ try {
             # 程序集路径不变但 TFM / 位数变了（如 4.6.1 升级到 4.8、切换“首选 32 位”）：缓存工程中的设置已过时，需要重新生成。
             $inferred = & $generator @generate -InferOnly
             $current = ([xml](Get-Content -LiteralPath $projectPath -Raw)).Project.PropertyGroup
-            if ("$($current.TargetFramework)".Trim() -ne $inferred.TargetFramework -or "$($current.PlatformTarget)".Trim() -ne $inferred.Platform) {
+            # Avalonia：业务程序集升级了引用的 Avalonia 版本时，缓存工程中的包版本也已过时。
+            $avaloniaStale = $Stack -eq 'avalonia' -and $inferred.AvaloniaVersion -and
+                -not (Select-String -LiteralPath $projectPath -SimpleMatch "Include=`"Avalonia`" Version=`"$($inferred.AvaloniaVersion)`"" -Quiet)
+            if ("$($current.TargetFramework)".Trim() -ne $inferred.TargetFramework -or "$($current.PlatformTarget)".Trim() -ne $inferred.Platform -or $avaloniaStale) {
                 Remove-Item -LiteralPath $workDir -Recurse -Force
             }
         }
@@ -228,6 +239,7 @@ try {
         # 视图配置只影响 harness.json，不需要重新构建。
         # 注意不能叫 $config：PowerShell 变量不区分大小写，会覆盖 [string]$Config 参数。
         $harnessConfig = [ordered]@{
+            stack = $Stack
             viewType = if ($ViewType) { $ViewType } else { $null }
             xaml = if ($Xaml) { $Xaml } else { $null }
             dataContextType = if ($DataContextType) { $DataContextType } else { $null }

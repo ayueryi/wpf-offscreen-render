@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
-// 用法：dotnet run --project mcp/WpfRenderMcp.Tests -- --root <仓库根目录> [--sample <SampleViews.dll>]
+// 用法：dotnet run --project mcp/AgentRender.Tests -- --root <仓库根目录> [--sample <SampleViews.dll>]
 // 经 mcp/start.ps1 启动服务器（与代理的 MCP 配置相同），逐项调用工具并断言结果。
 string? Option(string name)
 {
@@ -27,10 +27,10 @@ static JsonNode? Json(CallToolResult result) =>
     result.Content.OfType<TextContentBlock>().FirstOrDefault() is { } block && block.Text.TrimStart().StartsWith('{') ? JsonNode.Parse(block.Text) : null;
 
 // 使用 Claude Code 插件清单中的真实启动命令（${CLAUDE_PLUGIN_ROOT} 替换为仓库根目录），确保测试覆盖用户实际执行的命令行。
-var server = JsonNode.Parse(File.ReadAllText(Path.Combine(root, ".claude-plugin", "plugin.json")))!["mcpServers"]!["wpf-offscreen-render"]!;
+var server = JsonNode.Parse(File.ReadAllText(Path.Combine(root, ".claude-plugin", "plugin.json")))!["mcpServers"]!["agent-render"]!;
 await using var client = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
 {
-    Name = "wpf-offscreen-render",
+    Name = "agent-render",
     Command = server["command"]!.GetValue<string>(),
     Arguments = server["args"]!.AsArray().Select(arg => arg!.GetValue<string>().Replace("${CLAUDE_PLUGIN_ROOT}", root)).ToList(),
 }));
@@ -122,10 +122,10 @@ else
 }
 
 // Codex 的启动方式：codex.mcp.json 中的相对脚本路径 + 以插件目录为工作目录。此时相对路径参数应明确报错。
-var codexServer = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "codex.mcp.json")))!["mcpServers"]!["wpf-offscreen-render"]!;
+var codexServer = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "codex.mcp.json")))!["mcpServers"]!["agent-render"]!;
 await using (var codexClient = await McpClient.CreateAsync(new StdioClientTransport(new StdioClientTransportOptions
 {
-    Name = "wpf-offscreen-render-codex",
+    Name = "agent-render-codex",
     Command = codexServer["command"]!.GetValue<string>(),
     Arguments = codexServer["args"]!.AsArray().Select(arg => arg!.GetValue<string>()).ToList(),
     WorkingDirectory = Path.GetFullPath(Path.Combine(root, codexServer["cwd"]!.GetValue<string>())),

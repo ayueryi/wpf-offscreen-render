@@ -11,16 +11,16 @@ param(
     [string]$Filter = '*'
 )
 $ErrorActionPreference = 'Stop'
-if (-not $IsWindows) { throw 'WPF 渲染测试需要 Windows。' }
+if (-not $IsWindows) { throw '渲染测试需要 Windows。' }
 
 $root = Split-Path -Parent $PSScriptRoot
-$generator = Join-Path $root 'scripts\new-wpf-harness.ps1'
-$renderer = Join-Path $root 'scripts\invoke-wpf-render.ps1'
+$generator = Join-Path $root 'scripts\new-agent-harness.ps1'
+$renderer = Join-Path $root 'scripts\invoke-agent-render.ps1'
 $oneStep = Join-Path $root 'scripts\render.ps1'
 $comparer = Join-Path $root 'scripts\compare-snapshots.ps1'
 $fixtures = Join-Path $PSScriptRoot 'fixtures'
 $userArtifacts = [bool]$ArtifactsDir
-if (-not $ArtifactsDir) { $ArtifactsDir = Join-Path ([IO.Path]::GetTempPath()) ('wpf-render-tests-' + [guid]::NewGuid().ToString('N')) }
+if (-not $ArtifactsDir) { $ArtifactsDir = Join-Path ([IO.Path]::GetTempPath()) ('agent-render-tests-' + [guid]::NewGuid().ToString('N')) }
 $ArtifactsDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ArtifactsDir)
 # 生成器拒绝覆盖已有工程目录，复用非空目录会让用例误报失败。
 if ((Test-Path -LiteralPath $ArtifactsDir) -and (Get-ChildItem -LiteralPath $ArtifactsDir -Force | Select-Object -First 1)) {
@@ -53,6 +53,10 @@ $cases = @(
             toolVersion = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -TotalCount 1).Trim() } }
     @{ Name = 'xaml-ok'; Quick = $true; Generate = @{ Xaml = Join-Path $fixtures 'ok.xaml' }
         Expect = @{ exitCode = 0; status = 'ok'; sourceViewType = 'System.Windows.Controls.Border'; layoutIssueCount = 0 } }
+    @{ Name = 'avalonia'; Kind = 'Avalonia' }
+    @{ Name = 'avalonia-layout'; Kind = 'AvaloniaLayout' }
+    @{ Name = 'trust-config'; Kind = 'TrustConfig' }
+    @{ Name = 'stack-rules'; Kind = 'StackRules' }
     @{ Name = 'sample-dark-dpi144'; Render = @{ Theme = 'dark'; Dpi = 144; Width = 640; Height = 360 }
         Expect = @{ exitCode = 0; pixelSize = '960x540'; background = '#FF1E1E1E' } }
     @{ Name = 'sample-window-host'; Render = @{ WindowHost = $true; Width = 800; Height = 600 }
@@ -341,7 +345,7 @@ function Test-Mcp($case) {
     $failures = [Collections.Generic.List[string]]::new()
     $env:WPF_RENDER_MCP_CACHE = Join-Path $ArtifactsDir "$($case.Name)-cache"
     try {
-        $lines = & dotnet run --project (Join-Path $root 'mcp\WpfRenderMcp.Tests') -c Release -- --root $root --sample $samples['net8'] 2>&1 | ForEach-Object { "$_" }
+        $lines = & dotnet run --project (Join-Path $root 'mcp\AgentRender.Tests') -c Release -- --root $root --sample $samples['net8'] 2>&1 | ForEach-Object { "$_" }
         $code = $LASTEXITCODE
     }
     finally { Remove-Item Env:WPF_RENDER_MCP_CACHE -ErrorAction SilentlyContinue }
@@ -539,7 +543,7 @@ function Test-AntigravityInstall($case) {
     # 安装到空目录：创建配置与条目。
     Set-McpServerEntry $configPath $true 'C:/plugin/mcp/start.ps1'
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable
-    if ($config.mcpServers['wpf-offscreen-render'].args[-1] -ne 'C:/plugin/mcp/start.ps1') {
+    if ($config.mcpServers['agent-render'].args[-1] -ne 'C:/plugin/mcp/start.ps1') {
         $failures.Add("安装应写入指向 start.ps1 的条目：$($config | ConvertTo-Json -Compress -Depth 5)")
     }
 
@@ -549,7 +553,7 @@ function Test-AntigravityInstall($case) {
     Set-McpServerEntry $configPath $true 'C:/plugin/mcp/start.ps1'
     Set-McpServerEntry $configPath $false 'C:/plugin/mcp/start.ps1'
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable
-    if ($config.mcpServers.Contains('wpf-offscreen-render')) { $failures.Add('卸载后不应残留我们的条目') }
+    if ($config.mcpServers.Contains('agent-render')) { $failures.Add('卸载后不应残留我们的条目') }
     if (-not $config.mcpServers.Contains('other-server')) { $failures.Add('卸载不应影响其他服务器条目') }
 
     # 原配置损坏：备份为 .bak 后重建，不静默丢弃。
@@ -557,13 +561,13 @@ function Test-AntigravityInstall($case) {
     Set-McpServerEntry $configPath $true 'C:/plugin/mcp/start.ps1'
     if (-not (Test-Path -LiteralPath "$configPath.bak")) { $failures.Add('损坏的配置应备份为 .bak') }
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable
-    if (-not $config.mcpServers.Contains('wpf-offscreen-render')) { $failures.Add('损坏后应重建为有效配置') }
+    if (-not $config.mcpServers.Contains('agent-render')) { $failures.Add('损坏后应重建为有效配置') }
 
     # skill 挂载：NTFS 上得到 junction；卸载后目标消失、源目录不动。
     $source = Join-Path $ArtifactsDir "$($case.Name)-skill-src"
     $null = New-Item -ItemType Directory -Path $source
     Set-Content -LiteralPath (Join-Path $source 'SKILL.md') -Value '# test'
-    $target = Join-Path $dir 'skills\wpf-offscreen-render'
+    $target = Join-Path $dir 'skills\agent-render'
     $mode = Mount-Skill $target $source
     if (-not (Test-Path -LiteralPath (Join-Path $target 'SKILL.md'))) { $failures.Add("挂载后目标应可读（mode=$mode）") }
     Unmount-Skill $target
@@ -634,7 +638,7 @@ function Test-HostFrameworks($case) {
 # 宿主纯逻辑单元测试（BindingIssues / Json）：改解析与序列化逻辑时先跑这里，快于端到端。
 function Test-LogicTests($case) {
     $failures = [Collections.Generic.List[string]]::new()
-    & dotnet test (Join-Path $root 'tests\WpfRenderLogic.Tests\WpfRenderLogic.Tests.csproj') -c Release --nologo 2>&1 |
+    & dotnet test (Join-Path $root 'tests\AgentRenderLogic.Tests\AgentRenderLogic.Tests.csproj') -c Release --nologo 2>&1 |
         ForEach-Object { "$_" } | Where-Object { $_ -match '^\s+Failed |error ' } | ForEach-Object { $failures.Add($_) }
     if ($LASTEXITCODE -ne 0 -and $failures.Count -eq 0) { $failures.Add("单元测试退出码 $LASTEXITCODE") }
     $failures
@@ -695,6 +699,132 @@ function Test-Hook($case) {
     if ($changedNotice.decision -or $changedNotice.systemMessage -notlike '*修改*') { $failures.Add("配置修改后应要求重新授权：$changed") }
     }
     finally { $env:WPF_RENDER_TRUST_FILE = $previousTrust }
+    $failures
+}
+
+# Avalonia 宿主：松散 AXAML、绑定日志、PNG、stack 摘要，以及本期明确拒绝的 steps。
+function Test-Avalonia($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $xaml = Join-Path $ArtifactsDir "$($case.Name).axaml"
+    @'
+<Border xmlns="https://github.com/avaloniaui" Background="White" Width="400" Height="200">
+  <TextBlock Name="BrokenText" FontSize="24" Text="{Binding MissingProperty}" Margin="24" />
+</Border>
+'@ | Set-Content -LiteralPath $xaml -Encoding utf8
+
+    $outDir = & $oneStep -Stack avalonia -NoCache -Xaml $xaml -DataContextType System.Object -Width 400 -Height 200 6> $null
+    $exitCode = $LASTEXITCODE
+    $summary = if (Test-Path -LiteralPath (Join-Path "$outDir" 'summary.json')) {
+        Get-Content -LiteralPath (Join-Path "$outDir" 'summary.json') -Raw | ConvertFrom-Json
+    }
+    $manifest = if (Test-Path -LiteralPath (Join-Path "$outDir" 'manifest.json')) {
+        Get-Content -LiteralPath (Join-Path "$outDir" 'manifest.json') -Raw | ConvertFrom-Json
+    }
+    if ($exitCode -ne 2) { $failures.Add("绑定错误渲染退出码期望 2，实际 $exitCode") }
+    if ($summary.status -ne 'binding-issues') { $failures.Add("Avalonia status 期望 binding-issues，实际 $($summary.status)") }
+    if ($manifest.stack -ne 'avalonia' -or $summary.stack -ne 'avalonia') { $failures.Add('结果未标记 stack=avalonia') }
+    if ($summary.bindingTraceVerified -ne $true) { $failures.Add('Avalonia 绑定监听自检未命中') }
+    if (-not (@($summary.bindingIssues) -match 'MissingProperty')) { $failures.Add('Avalonia 绑定摘要中没有 MissingProperty') }
+    if (-not $summary.snapshot -or -not (Test-Path -LiteralPath $summary.snapshot)) { $failures.Add('Avalonia 缺少 snapshot.png') }
+
+    $stepsOut = & $oneStep -Stack avalonia -NoCache -Steps '[{"name":"unsupported","focus":{"element":"x"}}]' 6> $null
+    $stepsExit = $LASTEXITCODE
+    $stepsSummary = Get-Content -LiteralPath (Join-Path "$stepsOut" 'summary.json') -Raw | ConvertFrom-Json
+    if ($stepsExit -ne 3 -or $stepsSummary.status -ne 'failed:step') {
+        $failures.Add("Avalonia steps 应返回 failed:step / 3，实际 $($stepsSummary.status) / $stepsExit")
+    }
+    $failures
+}
+
+# Avalonia 布局与像素：模板化控件必须真的画出来；layout.json 的深度、截图坐标与五类问题与 WPF 契约一致。
+function Test-AvaloniaLayout($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    Add-Type -AssemblyName System.Drawing
+
+    # 内置样例：Button 的底色必须出现在截图里（此前游离控件没有模板，按钮整块空白而状态仍是 ok）。
+    $outDir = & $oneStep -Stack avalonia -NoCache -Width 400 -Height 220 6> $null
+    $layout = Get-Content -LiteralPath (Join-Path "$outDir" 'layout.json') -Raw | ConvertFrom-Json
+    $summary = Get-Content -LiteralPath (Join-Path "$outDir" 'summary.json') -Raw | ConvertFrom-Json
+    $button = @($layout.nodes | Where-Object type -eq 'Button')[0]
+    if (-not $button) { $failures.Add('layout.json 中没有 Button 节点') }
+    else {
+        $bitmap = [Drawing.Bitmap]::new($summary.snapshot)
+        try {
+            $pixel = $bitmap.GetPixel([int]$button.rect[0] + 6, [int]$button.rect[1] + 6)
+            if ($pixel.R -gt 245 -and $pixel.G -gt 245 -and $pixel.B -gt 245) { $failures.Add("Button 区域仍是背景色（$($pixel.Name)）：模板化控件没有渲染") }
+        }
+        finally { $bitmap.Dispose() }
+    }
+    $maxDepth = ($layout.nodes | Measure-Object -Property depth -Maximum).Maximum
+    if ($maxDepth -lt 2) { $failures.Add("layout.json 节点深度应反映视觉树层级，最大深度只有 $maxDepth") }
+    $title = @($layout.nodes | Where-Object { $_.type -eq 'TextBlock' })[0]
+    if ($title -and ([int]$title.rect[0] -ne 32 -or [int]$title.rect[1] -ne 32)) {
+        $failures.Add("TextBlock 的矩形应是截图坐标 32,32，实际 $($title.rect -join ',')")
+    }
+
+    # 布局问题夹具：五类问题全部检出，坐标与计数不随 DPI 变化。
+    $outDir = & $oneStep -Stack avalonia -NoCache -Xaml (Join-Path $fixtures 'avalonia-layout-problems.axaml') -Width 400 -Height 200 6> $null
+    $problems = Get-Content -LiteralPath (Join-Path "$outDir" 'layout.json') -Raw | ConvertFrom-Json
+    if ($problems.issueCount -ne 5) { $failures.Add("布局问题期望 5 条，实际 $($problems.issueCount)") }
+    $found = @($problems.issues | ForEach-Object { "$($_.kind):$($_.element)" })
+    foreach ($item in $layoutProblemKinds) {
+        if (-not ($found | Where-Object { $_.StartsWith($item, [StringComparison]::Ordinal) })) { $failures.Add("缺少布局问题 $item") }
+    }
+    $failures
+}
+
+# 授权：agent-render.json 与旧的 wpf-render.json 都能授权、修改后失效、撤销，旧授权库一次性迁入。
+function Test-TrustConfig($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    $trustScript = Join-Path $root 'scripts\trust-project.ps1'
+    $saved = @{ Agent = $env:AGENT_RENDER_TRUST_FILE; Wpf = $env:WPF_RENDER_TRUST_FILE }
+    $env:AGENT_RENDER_TRUST_FILE = Join-Path $ArtifactsDir "$($case.Name)-trust.json"
+    $env:WPF_RENDER_TRUST_FILE = $null
+    try {
+        . (Join-Path $root 'scripts\TrustStore.ps1')
+        foreach ($name in 'agent-render.json', 'wpf-render.json') {
+            $dir = Join-Path $ArtifactsDir "$($case.Name)-$($name -replace '\.json$')"
+            $null = New-Item -ItemType Directory -Path $dir -Force
+            $config = Join-Path $dir $name
+            Set-Content -LiteralPath $config -Value '{ "verifyOnStop": true, "views": {} }'
+            $null = & $trustScript -Path $dir
+            if ((Get-ProjectTrust $config) -ne 'trusted') { $failures.Add("$name：授权后应为 trusted") }
+            Add-Content -LiteralPath $config -Value ' '
+            if ((Get-ProjectTrust $config) -ne 'changed') { $failures.Add("$name：修改后应为 changed") }
+            $null = & $trustScript -Path $dir -Revoke
+            if ((Get-ProjectTrust $config) -ne 'untrusted') { $failures.Add("$name：撤销后应为 untrusted") }
+        }
+    }
+    catch { $failures.Add("授权流程异常：$($_.Exception.Message)") }
+    finally { $env:AGENT_RENDER_TRUST_FILE = $saved.Agent; $env:WPF_RENDER_TRUST_FILE = $saved.Wpf }
+    $failures
+}
+
+# 技术栈判定：显式值校验；Avalonia 宿主的 TFM 推断拒绝 .NET Framework。
+function Test-StackRules($case) {
+    $failures = [Collections.Generic.List[string]]::new()
+    . (Join-Path $root 'scripts\Stack.ps1')
+    if ((Get-AgentRenderStack @() 'Avalonia') -ne 'avalonia') { $failures.Add('显式 -Stack 应忽略大小写并优先') }
+    if ((Get-AgentRenderStack @() $null) -ne 'wpf') { $failures.Add('没有程序集时默认 wpf') }
+    try { $null = Get-AgentRenderStack @() 'winui'; $failures.Add('未知技术栈应报错') } catch { }
+    $info = Get-AvaloniaHostInfo @() $null $null
+    if ($info.TargetFramework -ne 'net8.0' -or $info.AvaloniaVersion -notmatch '^11\.') { $failures.Add("默认宿主应为 net8.0 + Avalonia 11.x，实际 $($info.TargetFramework) / $($info.AvaloniaVersion)") }
+    try { $null = Get-AvaloniaHostInfo @() 'net8.0-windows' $null; $failures.Add('Avalonia 宿主不应接受 -windows TFM') } catch { }
+    # 真实程序集的 AssemblyRef 判定（此前把 MetadataReader 的属性当方法调用，只有传入程序集时才会炸）。
+    if ($samples['net8']) {
+        $detected = Get-AgentRenderStack @($samples['net8']) $null
+        if ($detected -ne 'wpf') { $failures.Add("WPF 样例程序集应判为 wpf，实际 $detected") }
+    }
+    $avaloniaDll = Join-Path $HOME '.nuget\packages\avalonia\11.3.22\lib\net8.0\Avalonia.Controls.dll'
+    if (Test-Path -LiteralPath $avaloniaDll) {
+        $detected = Get-AgentRenderStack @($avaloniaDll) $null
+        if ($detected -ne 'avalonia') { $failures.Add("Avalonia 程序集应判为 avalonia，实际 $detected") }
+        $info = Get-AvaloniaHostInfo @($avaloniaDll) $null $null
+        if ($info.TargetFramework -ne 'net8.0') { $failures.Add("Avalonia 程序集的宿主 TFM 期望 net8.0，实际 $($info.TargetFramework)") }
+        if ($samples['net8']) {
+            try { $null = Get-AgentRenderStack @($avaloniaDll, $samples['net8']) $null; $failures.Add('WPF 与 Avalonia 混合引用应报错') } catch { }
+        }
+    }
     $failures
 }
 

@@ -1,0 +1,27 @@
+{
+  "verifyOnStop": true,
+  "blockOnLayoutIssues": false,
+  "defaults": {
+    "stack": "wpf",
+    "assemblyPaths": ["src/MyApp/bin/Debug/net8.0-windows/MyApp.dll"],
+    "build": ["dotnet", "build", "src/MyApp/MyApp.csproj", "-c", "Debug", "--nologo"],
+    "themes": ["light"],
+    "width": 1280,
+    "height": 800
+  },
+  "views": {
+    "OrderList": {
+      "stack": "wpf",
+      "viewType": "MyUi.Views.OrderListView",
+      "dataContextFactory": "MyUi.Preview.PreviewData.CreateOrderList",
+      "themes": ["light", "dark"],
+      "watch": ["src/MyUi/Views/OrderList*", "src/MyUi/ViewModels/OrderList*", "src/MyUi/Themes/**"]
+    },
+    "AvaloniaProbe": {
+      "stack": "avalonia",
+      "xaml": "preview/AvaloniaProbe.axaml",
+      "themes": ["light", "dark"],
+      "watch": ["src/MyUi/Views/**", "preview/AvaloniaProbe.axaml"]
+    }
+  }
+}

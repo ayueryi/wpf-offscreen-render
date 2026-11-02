@@ -1,9 +1,9 @@
 {
-  "name": "wpf-offscreen-render",
-  "interface": { "displayName": "WPF Offscreen Render" },
+  "name": "agent-render",
+  "interface": { "displayName": "Agent Render" },
   "plugins": [
     {
-      "name": "wpf-offscreen-render",
+      "name": "agent-render",
       "source": { "source": "local", "path": "./" },
       "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL", "products": ["CODEX"] },
       "category": "Developer Tools"

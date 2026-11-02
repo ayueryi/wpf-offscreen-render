@@ -3,9 +3,9 @@
 # 都吃绝对路径参数、不读 $HOME：脚本负责算用户目录下的位置，测试用临时目录直测。
 # 这些函数写的是用户机器上的真实配置，安装与卸载必须严格互逆。
 
-# 在 mcp_config.json 中登记 / 移除 wpf-offscreen-render 服务器条目。
+# 在 mcp_config.json 中登记 / 移除 agent-render 服务器条目。
 # 原文件解析失败时备份为 .bak 后重建：保留用户其他服务器条目，只动我们这一个键。
-function Set-McpServerEntry([string]$Path, [bool]$Present, [string]$StartScriptPath, [string]$Name = 'wpf-offscreen-render') {
+function Set-McpServerEntry([string]$Path, [bool]$Present, [string]$StartScriptPath, [string]$Name = 'agent-render') {
     $config = [ordered]@{}
     if (Test-Path -LiteralPath $Path) {
         $raw = Get-Content -LiteralPath $Path -Raw

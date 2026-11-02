@@ -61,7 +61,7 @@ Get-Content -LiteralPath (Join-Path $outDir 'binding-errors.txt')
 
 ## 离线与内网环境
 
-- **MCP 服务器**：首次启动时 `mcp/start.ps1` 需要从 NuGet 还原 `ModelContextProtocol`。离线机器上可以先在联网的同版本环境中运行一次 `mcp/start.ps1 -BuildOnly`，再把 `%LOCALAPPDATA%\wpf-offscreen-render\mcp\<哈希>` 整个目录复制到离线机器的相同位置；哈希由服务器源码决定，插件版本相同即可复用。也可以通过 `WPF_RENDER_MCP_CACHE` 指定缓存目录。
+- **MCP 服务器**：首次启动时 `mcp/start.ps1` 需要从 NuGet 还原 `ModelContextProtocol`。离线机器上可以先在联网的同版本环境中运行一次 `mcp/start.ps1 -BuildOnly`，再把 `%LOCALAPPDATA%\agent-render\mcp\<哈希>` 整个目录复制到离线机器的相同位置；哈希由服务器源码决定，插件版本相同即可复用。也可以通过 `AGENT_RENDER_MCP_CACHE` 指定缓存目录（兼容旧的 `WPF_RENDER_MCP_CACHE`）。
 - **.NET Framework 宿主**：需要安装对应版本的 .NET Framework Developer Pack；未安装时 SDK 会尝试从 NuGet 还原引用程序集。
 - **业务程序集的 NuGet 依赖**：指向应用（exe）的输出目录时依赖已在目录中，不需要联网。
 
@@ -77,7 +77,8 @@ Get-Content -LiteralPath (Join-Path $outDir 'binding-errors.txt')
 | `-WindowHost` 需要桌面会话 | 无交互会话的服务或 CI 代理可能失败 |
 | .NET Core 3.x 程序 | 只支持 .NET Framework 4.7.2+ 与 .NET 5+ 宿主；3.x 程序集需升级，或显式 `-TargetFramework net5.0-windows` 等后自行验证兼容性 |
 | 混用 .NET Framework 与 .NET 程序集 | 一个进程只能承载一种运行时，生成器会拒绝；分别生成宿主 |
-| WinUI / UWP | 本工具针对 WPF 的 `System.Windows.Media.Imaging.RenderTargetBitmap`，与 WinUI / UWP 同名 API 无关 |
+| Avalonia 宿主能力子集 | 本期只支持初始截图、主题 / 尺寸 / DPI、绑定与布局检查、元素截图与快照对比；不支持 `windowHost` 与 `steps`，资源使用 `avares://` 或文件路径 |
+| WinUI / UWP | 本工具 WPF 宿主针对 `System.Windows.Media.Imaging.RenderTargetBitmap`，Avalonia 宿主走 Skia，均与 WinUI / UWP 同名 API 无关 |
 
 ## 性能验证边界
 

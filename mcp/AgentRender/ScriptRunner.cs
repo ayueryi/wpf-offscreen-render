@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 
-namespace WpfRenderMcp;
+namespace AgentRender;
 
 // 通过 mcp/invoke-script.ps1 在独立 pwsh 进程中运行 scripts/ 下的脚本。
 // 子进程的 stdin / stdout / stderr 全部重定向，不能占用 MCP 的 stdio 通道。
@@ -42,7 +42,7 @@ public sealed class ScriptRunner(string root)
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                // 与服务器相同的工作目录（代理会话的项目目录）：相对路径与向上查找 wpf-render.json 在各工具中含义一致。
+                // 与服务器相同的工作目录（代理会话的项目目录）：相对路径与向上查找 agent-render.json（兼容 wpf-render.json） 在各工具中含义一致。
                 WorkingDirectory = Environment.CurrentDirectory,
             };
             // -ExecutionPolicy Bypass 只作用于这个进程：从 ZIP 解压（带“来自网络”标记）或策略为 AllSigned 时脚本也能运行。

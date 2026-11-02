@@ -1,5 +1,5 @@
 {
-  "description": "业务项目的 wpf-render.json 设置 verifyOnStop 时，结束本轮前渲染受影响的 WPF 视图，有渲染失败或绑定错误时让代理继续修复",
+  "description": "业务项目的 agent-render.json 设置 verifyOnStop 时，结束本轮前渲染受影响的 WPF/Avalonia 视图，有渲染失败或绑定错误时让代理继续修复",
   "hooks": {
     "Stop": [
       {

@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
-namespace WpfRenderMcp;
+namespace AgentRender;
 
 [McpServerToolType]
 public sealed class RenderTools(ScriptRunner runner)
@@ -15,17 +15,18 @@ public sealed class RenderTools(ScriptRunner runner)
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     // 渲染会构建项目（build: true 时执行预设命令）、运行业务代码并写入文件，不能标为只读，以免客户端据此自动批准。
-    [McpServerTool(Name = "render_view", Title = "Render WPF view", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("在独立临时进程中把真实 WPF UserControl / Page / Window 或松散 XAML 离屏渲染成 PNG（需要 Windows）。"
+    [McpServerTool(Name = "render_view", Title = "Render agent view", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [Description("在独立临时进程中把真实 WPF / Avalonia Control 或松散 XAML / AXAML 离屏渲染成 PNG（需要 Windows）。"
         + "返回 JSON 摘要（status、bindingIssues 单行绑定结论、layoutIssues 布局问题、尺寸、outDir）和截图。"
-        + "业务项目有 wpf-render.json 时优先用 config + preset（先用 list_views 查看可用视图），build=true 会先构建业务项目；"
+        + "业务项目有 agent-render.json（兼容旧 wpf-render.json）时优先用 config + preset（先用 list_views 查看可用视图），build=true 会先构建业务项目；"
         + "否则传 assemblyPaths + viewType / xaml。都不传时渲染内置样例。同一组程序集第二次起跳过宿主构建。"
         + "传 steps 时在初始截图后依次执行交互步骤（设置属性、点击、切换状态、动画取帧等），每步截图并检查，返回每步摘要与总览图。")]
     public async Task<CallToolResult> RenderView(
-        [Description("wpf-render.json 的绝对路径或其所在目录（业务项目根目录）")] string? config = null,
-        [Description("wpf-render.json 中的视图名；其余参数省略时取预设值，显式传入时覆盖")] string? preset = null,
+        [Description("agent-render.json（兼容旧 wpf-render.json）的绝对路径或其所在目录（业务项目根目录）")] string? config = null,
+        [Description("agent-render.json（兼容旧 wpf-render.json）中的视图名；其余参数省略时取预设值，显式传入时覆盖")] string? preset = null,
         [Description("渲染前在配置目录执行预设的 build 命令（修改了业务代码时使用）")] bool build = false,
-        [Description("业务程序集（.dll / .NET Framework .exe）绝对路径；TFM 与位数据此自动推断")] string[]? assemblyPaths = null,
+        [Description("业务程序集（.dll / .NET Framework .exe）绝对路径；TFM 与技术栈自动推断")] string[]? assemblyPaths = null,
+        [Description("技术栈：wpf 或 avalonia；省略时按程序集引用自动推断")] string? stack = null,
         [Description("视图类型全名，如 MyUi.Views.OrderView；需无参构造。与 xaml 二选一")] string? viewType = null,
         [Description("松散 XAML 文件路径（无 x:Class / 事件），与 viewType 二选一")] string? xaml = null,
         [Description("DataContext 类型全名，需无参构造")] string? dataContextType = null,
@@ -60,8 +61,8 @@ public sealed class RenderTools(ScriptRunner runner)
         if ((RelativePathError(("config", config), ("xaml", xaml), ("factoryFile", factoryFile)) ?? RelativePathError("assemblyPaths", assemblyPaths)) is { } pathError)
             return Error(pathError);
         if (preset is not null && config is null && runner.StartedInPluginRoot)
-            return Error("使用 preset 时需要传 config（wpf-render.json 的绝对路径或所在目录）：服务器的工作目录是插件目录，无法向上查找业务项目的配置。");
-        var arguments = ViewArguments(assemblyPaths, viewType, xaml, dataContextType, resourceDictionaries, targetFramework, platform);
+            return Error("使用 preset 时需要传 config（agent-render.json（兼容旧 wpf-render.json）的绝对路径或所在目录）：服务器的工作目录是插件目录，无法向上查找业务项目的配置。");
+        var arguments = ViewArguments(assemblyPaths, stack, viewType, xaml, dataContextType, resourceDictionaries, targetFramework, platform);
         arguments["Config"] = config;
         arguments["Preset"] = preset;
         arguments["Build"] = build ? true : null;
@@ -103,10 +104,10 @@ public sealed class RenderTools(ScriptRunner runner)
         return new CallToolResult { Content = content, IsError = IsFailed(summary) };
     }
 
-    [McpServerTool(Name = "list_views", Title = "List WPF render presets", ReadOnly = true, Idempotent = true, OpenWorld = false)]
-    [Description("列出业务项目 wpf-render.json 中配置的视图（名称、合并 defaults 后的视图类型、主题 / 尺寸、watch 文件模式），供 render_view 的 preset 参数使用。")]
+    [McpServerTool(Name = "list_views", Title = "List agent render presets", ReadOnly = true, Idempotent = true, OpenWorld = false)]
+    [Description("列出业务项目 agent-render.json（兼容旧 wpf-render.json）中配置的视图（名称、合并 defaults 后的视图类型、主题 / 尺寸、watch 文件模式），供 render_view 的 preset 参数使用。")]
     public async Task<CallToolResult> ListViews(
-        [Description("wpf-render.json 的绝对路径或其所在目录")] string config,
+        [Description("agent-render.json（兼容旧 wpf-render.json）的绝对路径或其所在目录")] string config,
         CancellationToken cancellationToken = default)
     {
         if (RelativePathError(("config", config)) is { } pathError) return Error(pathError);
@@ -125,10 +126,11 @@ public sealed class RenderTools(ScriptRunner runner)
         }
     }
 
-    [McpServerTool(Name = "render_matrix", Title = "Render WPF view matrix", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [McpServerTool(Name = "render_matrix", Title = "Render agent view matrix", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("一次渲染多个主题 × 尺寸 × DPI 组合（需要 Windows），只构建一次。返回 matrix JSON（每个组合的状态、绑定与布局问题、截图路径）和拼好的总览图。")]
     public async Task<CallToolResult> RenderMatrix(
         [Description("业务程序集绝对路径")] string[]? assemblyPaths = null,
+        [Description("技术栈：wpf 或 avalonia；省略时按程序集引用自动推断")] string? stack = null,
         [Description("视图类型全名，与 xaml 二选一")] string? viewType = null,
         [Description("松散 XAML 文件路径")] string? xaml = null,
         [Description("DataContext 类型全名")] string? dataContextType = null,
@@ -145,7 +147,7 @@ public sealed class RenderTools(ScriptRunner runner)
     {
         if (!OperatingSystem.IsWindows()) return WindowsOnly();
         if ((RelativePathError(("xaml", xaml)) ?? RelativePathError("assemblyPaths", assemblyPaths)) is { } pathError) return Error(pathError);
-        var arguments = ViewArguments(assemblyPaths, viewType, xaml, dataContextType, resourceDictionaries, targetFramework, platform);
+        var arguments = ViewArguments(assemblyPaths, stack, viewType, xaml, dataContextType, resourceDictionaries, targetFramework, platform);
         arguments["Theme"] = themes is { Length: > 0 } ? themes : new[] { "light", "dark" };
         arguments["Size"] = sizes is { Length: > 0 } ? sizes : null;
         arguments["Dpi"] = dpis is { Length: > 0 } ? dpis : new[] { 96 };
@@ -168,7 +170,7 @@ public sealed class RenderTools(ScriptRunner runner)
         return new CallToolResult { Content = single, IsError = IsFailed(summary) };
     }
 
-    [McpServerTool(Name = "compare_snapshots", Title = "Compare WPF snapshots", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [McpServerTool(Name = "compare_snapshots", Title = "Compare agent snapshots", ReadOnly = false, Destructive = false, OpenWorld = false)]
     [Description("比较前后两次渲染（需要 Windows）：返回 status（same / different）、变化像素占比、变化区域（像素与 DIP，可对照 get_layout）、"
         + "两次渲染的环境差异，以及差异图（变化像素标红）。before / after 为 render_view 返回的 outDir 或 snapshot.png 路径。")]
     public async Task<CallToolResult> CompareSnapshots(
@@ -265,10 +267,11 @@ public sealed class RenderTools(ScriptRunner runner)
     private string? RelativePathError(string name, string[]? values) =>
         RelativePathError((values ?? []).Select(value => (name, (string?)value)).ToArray());
 
-    private static Dictionary<string, object?> ViewArguments(string[]? assemblyPaths, string? viewType, string? xaml, string? dataContextType,
+    private static Dictionary<string, object?> ViewArguments(string[]? assemblyPaths, string? stack, string? viewType, string? xaml, string? dataContextType,
         string[]? resourceDictionaries, string? targetFramework, string? platform) => new()
     {
         ["AssemblyPath"] = assemblyPaths is { Length: > 0 } ? assemblyPaths : null,
+        ["Stack"] = stack,
         ["ViewType"] = viewType,
         ["Xaml"] = xaml,
         ["DataContextType"] = dataContextType,
@@ -305,7 +308,7 @@ public sealed class RenderTools(ScriptRunner runner)
     private static JsonNode? ReadJson(string path)
     {
         if (!File.Exists(path)) return null;
-        // 与 PowerShell 的 ConvertFrom-Json 一样容忍注释与尾逗号，否则带注释的 wpf-render.json 能渲染却列不出视图。
+        // 与 PowerShell 的 ConvertFrom-Json 一样容忍注释与尾逗号，否则带注释的 agent-render.json（兼容旧 wpf-render.json）能渲染却列不出视图。
         try { return JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }); }
         catch (JsonException) { return null; }
     }
@@ -342,7 +345,7 @@ public sealed class RenderTools(ScriptRunner runner)
     }
 
     private static CallToolResult WindowsOnly() =>
-        Error("WPF 渲染只能在 Windows 上运行；当前 MCP 服务器运行在 " + System.Runtime.InteropServices.RuntimeInformation.OSDescription + "。");
+        Error("当前 agent-render 宿主只能在 Windows 上运行；当前 MCP 服务器运行在 " + System.Runtime.InteropServices.RuntimeInformation.OSDescription + "。");
 
     private static CallToolResult Error(string message) => new() { Content = [new TextContentBlock { Text = message }], IsError = true };
 }

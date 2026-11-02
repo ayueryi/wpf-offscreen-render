@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace WpfRenderLogic.Tests;
+namespace AgentRenderLogic.Tests;
 
 // 绑定 trace 文本解析：摘要要给出「目标元素.属性 <- 路径（数据源）：原因」的可读结论。
 public class BindingIssuesTests

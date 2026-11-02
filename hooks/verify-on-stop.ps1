@@ -17,11 +17,11 @@ if ($null -eq $hookInput) { $hookInput = @{} }
 if (-not $IsWindows) { Exit-Quietly }
 $cwd = if ($hookInput.cwd) { $hookInput.cwd } else { (Get-Location).Path }
 
-# 从会话工作目录向上查找 wpf-render.json。
+# 从会话工作目录向上查找 agent-render.json，兼容旧的 wpf-render.json。
 $dir = $cwd
-while ($dir -and -not (Test-Path -LiteralPath (Join-Path $dir 'wpf-render.json'))) { $dir = Split-Path -Parent $dir }
+while ($dir -and -not (Test-Path -LiteralPath (Join-Path $dir 'agent-render.json')) -and -not (Test-Path -LiteralPath (Join-Path $dir 'wpf-render.json'))) { $dir = Split-Path -Parent $dir }
 if (-not $dir) { Exit-Quietly }
-$configPath = Join-Path $dir 'wpf-render.json'
+$configPath = if (Test-Path -LiteralPath (Join-Path $dir 'agent-render.json')) { Join-Path $dir 'agent-render.json' } else { Join-Path $dir 'wpf-render.json' }
 $config = try { Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable } catch { $null }
 if (-not $config -or $config.verifyOnStop -ne $true -or -not $config.views) { Exit-Quietly }
 
@@ -38,9 +38,9 @@ if ($trust -ne 'trusted') {
     $notice = Join-Path $noticeDir "$sessionKey-$configKey-$trust.notice"
     if (-not (Test-Path -LiteralPath $notice)) {
         Set-Content -LiteralPath $notice -Value $configPath
-        $why = if ($trust -eq 'changed') { 'wpf-render.json 在授权后被修改过' } else { '这个项目还没有授权' }
+        $why = if ($trust -eq 'changed') { '配置文件在授权后被修改过' } else { '这个项目还没有授权' }
         $trustScript = Join-Path $PSScriptRoot '..\scripts\trust-project.ps1'
-        [ordered]@{ systemMessage = "wpf-offscreen-render：$configPath 启用了结束前自动验证，但$why，本次跳过。确认信任后运行：pwsh -ExecutionPolicy Bypass -File `"$([IO.Path]::GetFullPath($trustScript))`" -Path `"$configPath`"" } |
+        [ordered]@{ systemMessage = "agent-render：$configPath 启用了结束前自动验证，但$why，本次跳过。确认信任后运行：pwsh -ExecutionPolicy Bypass -File `"$([IO.Path]::GetFullPath($trustScript))`" -Path `"$configPath`"" } |
             ConvertTo-Json -Compress -EscapeHandling EscapeNonAscii
     }
     exit 0

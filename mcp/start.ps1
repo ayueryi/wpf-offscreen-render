@@ -1,13 +1,13 @@
 #requires -Version 7.0
 # MCP 服务器启动器（Codex、Claude Code 等的 MCP 配置都指向这里）。
-# 首次运行或源码变化后，把 mcp/WpfRenderMcp 编译到本机缓存目录；之后直接启动编译好的服务器。
+# 首次运行或源码变化后，把 mcp/AgentRender 编译到本机缓存目录；之后直接启动编译好的服务器。
 # stdout 专用于 MCP 协议：编译输出全部转到 stderr；服务器用 Start-Process -NoNewWindow 直接继承 stdin / stdout 句柄，
 # 不经过 PowerShell 管道，避免协议数据被转码或缓冲。
 # -BuildOnly：只编译不启动。首次编译（含 NuGet 还原）可能超过客户端的 MCP 启动超时，可先手动运行一次预热。
 param([switch]$BuildOnly)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$source = Join-Path $PSScriptRoot 'WpfRenderMcp'
+$source = Join-Path $PSScriptRoot 'AgentRender'
 
 # 源码哈希决定缓存目录，更新插件后自动重新编译。按统一为 LF 的文本内容与正斜杠相对路径计算：
 # 不同机器的 git 换行设置不同，同版本插件也应得到相同哈希（离线机器可直接复用拷贝来的缓存）。
@@ -15,7 +15,7 @@ $files = Get-ChildItem -LiteralPath $source -File -Recurse |
     Where-Object { $_.Extension -in '.cs', '.csproj' -and $_.FullName.Substring($source.Length) -notmatch '[\\/](bin|obj)[\\/]' } | Sort-Object FullName
 # 只看相对源码目录的部分：插件安装路径本身可能含 \bin\ 或 \obj\。
 if (-not ($files | Where-Object Extension -eq '.csproj')) {
-    [Console]::Error.WriteLine("wpf-offscreen-render：$source 下没有找到 MCP 服务器源码（插件文件不完整？）。")
+    [Console]::Error.WriteLine("agent-render：$source 下没有找到 MCP 服务器源码（插件文件不完整？）。")
     exit 1
 }
 $hashInput = ($files | ForEach-Object {
@@ -24,11 +24,12 @@ $hashInput = ($files | ForEach-Object {
             (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($text))) -Algorithm SHA256).Hash
     }) -join "`n"
 $hash = (Get-FileHash -InputStream ([IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($hashInput))) -Algorithm SHA256).Hash.Substring(0, 16).ToLowerInvariant()
-$cacheRoot = if ($env:WPF_RENDER_MCP_CACHE) { $env:WPF_RENDER_MCP_CACHE }
-    elseif ($IsWindows) { Join-Path $env:LOCALAPPDATA 'wpf-offscreen-render\mcp' }
-    else { Join-Path ([IO.Path]::GetTempPath()) 'wpf-offscreen-render-mcp' }
+$cacheRoot = if ($env:AGENT_RENDER_MCP_CACHE) { $env:AGENT_RENDER_MCP_CACHE }
+    elseif ($env:WPF_RENDER_MCP_CACHE) { $env:WPF_RENDER_MCP_CACHE }
+    elseif ($IsWindows) { Join-Path $env:LOCALAPPDATA 'agent-render\mcp' }
+    else { Join-Path ([IO.Path]::GetTempPath()) 'agent-render-mcp' }
 $outDir = Join-Path $cacheRoot $hash
-$server = Join-Path $outDir 'WpfRenderMcp.dll'
+$server = Join-Path $outDir 'AgentRender.dll'
 
 if (-not (Test-Path -LiteralPath $server)) {
     # 多个代理会话同时启动时只编译一次。
@@ -58,21 +59,21 @@ if (-not (Test-Path -LiteralPath $server)) {
             }
             [IO.File]::WriteAllText((Join-Path $buildSource 'Directory.Packages.props'),
                 '<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>', $utf8)
-            [Console]::Error.WriteLine("wpf-offscreen-render：首次启动，正在编译 MCP 服务器到 $outDir …")
+            [Console]::Error.WriteLine("agent-render：首次启动，正在编译 MCP 服务器到 $outDir …")
             Push-Location -LiteralPath $buildSource
             try {
-                & dotnet build (Join-Path $buildSource 'WpfRenderMcp.csproj') -c Release --nologo -o $buildOut 2>&1 |
+                & dotnet build (Join-Path $buildSource 'AgentRender.csproj') -c Release --nologo -o $buildOut 2>&1 |
                     ForEach-Object { [Console]::Error.WriteLine("$_") }
                 $buildCode = $LASTEXITCODE
             }
             finally { Pop-Location }
-            if ($buildCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $buildOut 'WpfRenderMcp.dll'))) {
+            if ($buildCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $buildOut 'AgentRender.dll'))) {
                 if (Test-Path -LiteralPath $outDir) { Remove-Item -LiteralPath $outDir -Recurse -Force } # 缺少 dll 的残缺目录
                 Move-Item -LiteralPath $buildOut -Destination $outDir
             }
             Remove-Item -LiteralPath $buildSource, $buildOut -Recurse -Force -ErrorAction SilentlyContinue
             if (-not (Test-Path -LiteralPath $server)) {
-                [Console]::Error.WriteLine('wpf-offscreen-render：MCP 服务器编译失败，见上方输出（需要 .NET 8 或更高版本的 SDK）。')
+                [Console]::Error.WriteLine('agent-render：MCP 服务器编译失败，见上方输出（需要 .NET 8 或更高版本的 SDK）。')
                 exit 1
             }
         }
@@ -87,7 +88,7 @@ if (-not (Test-Path -LiteralPath $server)) {
     }
 }
 
-if ($BuildOnly) { [Console]::Error.WriteLine("wpf-offscreen-render：MCP 服务器已就绪：$server"); exit 0 }
+if ($BuildOnly) { [Console]::Error.WriteLine("agent-render：MCP 服务器已就绪：$server"); exit 0 }
 
 # Start-Process 拼接参数时不加引号，路径可能含空格（如用户目录），因此手动加引号。
 # 不用 -Wait：它会等待全部子孙进程（渲染时 dotnet build 留下的 MSBuild 节点、编译服务器），服务器退出后启动器仍不退出。

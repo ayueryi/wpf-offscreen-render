@@ -7,10 +7,10 @@
 | 入口 | 写法 |
 | --- | --- |
 | MCP | `render_view` 的 `steps`（数组）、`continueOnError`、`animations`、`includeStepImages` |
-| 预设 | `wpf-render.json` 视图中的 `steps`（以及 `continueOnError`、`animations`） |
-| 命令行 | `render.ps1 -Steps <JSON 数组字符串或文件路径> [-ContinueOnError] [-Animations settle]`；两步脚本同样在 `new-wpf-harness.ps1` 上传入 |
+| 预设 | `agent-render.json`（兼容旧 `wpf-render.json`）视图中的 `steps`（以及 `continueOnError`、`animations`） |
+| 命令行 | `render.ps1 -Steps <JSON 数组字符串或文件路径> [-ContinueOnError] [-Animations settle]`；两步脚本同样在 `new-agent-harness.ps1` 上传入 |
 
-步骤写入宿主的 `harness.json`，修改步骤不需要重新构建宿主。步骤**不能**与多个主题 / 尺寸 / DPI 同时使用，需要时对每个组合分别渲染。
+步骤写入宿主的 `harness.json`，修改步骤不需要重新构建宿主。步骤**不能**与多个主题 / 尺寸 / DPI 同时使用，需要时对每个组合分别渲染。Avalonia 宿主本期不支持交互步骤：传 `steps` 会返回 `failed:step`（退出码 3），不会静默忽略；需要交互验证时改用 WPF 宿主。
 
 ```json
 "steps": [

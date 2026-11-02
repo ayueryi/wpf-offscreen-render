@@ -27,11 +27,19 @@ $script:ExplicitParameterOverrides = @{
 function Resolve-WpfRenderConfig([string]$Config) {
     if (-not $Config) {
         $dir = (Get-Location).Path
-        while ($dir -and -not (Test-Path -LiteralPath (Join-Path $dir 'wpf-render.json'))) { $dir = Split-Path -Parent $dir }
-        if (-not $dir) { throw "从 $((Get-Location).Path) 向上没有找到 wpf-render.json，请用 -Config 指定。" }
-        return (Resolve-Path -LiteralPath (Join-Path $dir 'wpf-render.json')).ProviderPath
+        while ($dir) {
+            $agent = Join-Path $dir 'agent-render.json'
+            $legacy = Join-Path $dir 'wpf-render.json'
+            if (Test-Path -LiteralPath $agent) { return (Resolve-Path -LiteralPath $agent).ProviderPath }
+            if (Test-Path -LiteralPath $legacy) { return (Resolve-Path -LiteralPath $legacy).ProviderPath }
+            $dir = Split-Path -Parent $dir
+        }
+        throw "从 $((Get-Location).Path) 向上没有找到 agent-render.json 或 wpf-render.json，请用 -Config 指定。"
     }
-    if (Test-Path -LiteralPath $Config -PathType Container) { $Config = Join-Path $Config 'wpf-render.json' }
+    if (Test-Path -LiteralPath $Config -PathType Container) {
+        $preferred = Join-Path $Config 'agent-render.json'
+        $Config = if (Test-Path -LiteralPath $preferred) { $preferred } else { Join-Path $Config 'wpf-render.json' }
+    }
     if (-not (Test-Path -LiteralPath $Config)) { throw "找不到配置文件 $Config。" }
     return (Resolve-Path -LiteralPath $Config).ProviderPath
 }

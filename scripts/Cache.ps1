@@ -1,12 +1,13 @@
 #requires -Version 7.0
 # 宿主缓存的键、构建戳与过期清理 —— render.ps1 使用，缓存策略只在这里定义。
-# 策略：同一组 程序集路径 + TFM + 位数 + 工具版本 复用 %TEMP%\wpf-render-cache 下的同一宿主；
-# 缓存目录名为 16 位十六进制键；同一键的并发渲染由 Local\wpf-render-<键> 互斥量保护（render.ps1 持有）。
+# 策略：同一组 程序集路径 + TFM + 位数 + 工具版本 复用 %TEMP%\agent-render-cache 下的同一宿主；
+# 缓存目录名为 16 位十六进制键；同一键的并发渲染由 Local\agent-render-<键> 互斥量保护（render.ps1 持有）。
 
-# 工具版本键：生成器与 assets 宿主模板的内容哈希，加 TFM / 位数 / 工厂 / 程序集。模板更新后自动换新缓存。
-function Get-WpfRenderCacheKey([string]$GeneratorPath, [string]$AssetsDir,
+# 工具版本键：生成器与宿主模板的内容哈希，加 TFM / 位数 / 工厂 / 程序集。模板更新后自动换新缓存。
+# AssetsDirs 是模板目录列表（技术栈自己的目录加共享目录），不再是单一的 assets 根。
+function Get-WpfRenderCacheKey([string]$GeneratorPath, [string[]]$AssetsDirs,
     [string]$TargetFramework, [string]$Platform, [string]$FactoryFile, [string[]]$AssemblyPaths) {
-    $toolFiles = @($GeneratorPath) + @(Get-ChildItem -LiteralPath $AssetsDir -Filter '*.cs' | Sort-Object Name | ForEach-Object FullName)
+    $toolFiles = @($GeneratorPath) + @($AssetsDirs | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter '*.cs' } | Sort-Object FullName | ForEach-Object FullName)
     $keySource = [Text.StringBuilder]::new()
     foreach ($file in $toolFiles) { $null = $keySource.AppendLine((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash) }
     $null = $keySource.AppendLine("tfm=$TargetFramework;platform=$Platform;factory=$("$FactoryFile".ToLowerInvariant())")
@@ -35,7 +36,7 @@ function Remove-ExpiredWpfRenderCache([string]$CacheRoot, [string]$CurrentWorkDi
         if (-not $hasStamp -and -not (Test-Path -LiteralPath (Join-Path $dir.FullName 'RenderHarness.csproj'))) { continue }
         $lastUsed = if ($hasStamp) { (Get-Item -LiteralPath $stamp).LastWriteTime } else { $dir.LastWriteTime }
         if ($lastUsed -ge $cutoff) { continue }
-        $lock = [Threading.Mutex]::new($false, "Local\wpf-render-$($dir.Name)")
+        $lock = [Threading.Mutex]::new($false, "Local\agent-render-$($dir.Name)")
         try {
             $acquired = try { $lock.WaitOne(0) } catch [Threading.AbandonedMutexException] { $true }
             if ($acquired) {

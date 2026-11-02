@@ -1,4 +1,4 @@
-# 交互步骤的规范化（由 new-wpf-harness.ps1 与 render.ps1 点引用）。
+# 交互步骤的规范化（由 new-agent-harness.ps1 与 render.ps1 点引用）。
 # 用户写法：每步一个对象，可选 name / waitMs / waitFor / timeoutMs / capture，加至多一个动作字段：
 #   set / setData / invoke / command / state / focus / animate / custom（见 docs/design/interaction-steps.md）。
 # 宿主（assets/Steps.cs）读取扁平结构：action + 字段；所有值统一写成不变区域字符串，JSON null 写成 clear=true。
@@ -37,13 +37,13 @@ function ConvertTo-StepElement($Element, [string]$Where) {
     $result
 }
 
-function ConvertTo-HarnessSteps([string]$Steps, [string]$FactoryFile) {
+function ConvertTo-HarnessSteps([string]$Steps, [string]$FactoryFile, [string]$Stack = 'wpf') {
     $list = Read-StepsInput $Steps
     # custom 步骤由业务 ViewFactory.RunStepAsync 承接（运行时反射查找，未实现不影响编译）。
     # 错误左移：在生成宿主之前就检查工厂是否实现了它，省得用户等完整构建完才在执行时发现。
     # 判定与运行时反射同一约定、同一来源（同一份工厂文件）：内容含 RunStepAsync 即视为已实现。
     if ($list | Where-Object { $_.custom }) {
-        $factorySource = if ($FactoryFile) { $FactoryFile } else { Join-Path $PSScriptRoot '..\assets\ViewFactory.cs' }
+        $factorySource = if ($FactoryFile) { $FactoryFile } else { Join-Path $PSScriptRoot "..\assets\$Stack\ViewFactory.cs" }
         if (-not (Test-Path -LiteralPath $factorySource)) { throw "找不到工厂文件：$factorySource" }
         $factoryText = Get-Content -LiteralPath $factorySource -Raw
         if ($factoryText -notmatch 'RunStepAsync') {

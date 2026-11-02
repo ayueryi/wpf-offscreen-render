@@ -1,10 +1,10 @@
 # 脚本参数与输出产物
 
-`scripts/` 下各脚本的参数、渲染模式、输出文件、退出码与尺寸 / DPI 规则。使用流程见 [SKILL.md](../skills/wpf-offscreen-render/SKILL.md) 与 [README](../README.md)，接入业务界面见 [integration.md](integration.md)，验收与排障见 [verification.md](verification.md)。
+`scripts/` 下各脚本的参数、渲染模式、输出文件、退出码与尺寸 / DPI 规则。使用流程见 [SKILL.md](../skills/agent-render/SKILL.md) 与 [README](../README.md)，接入业务界面见 [integration.md](integration.md)，验收与排障见 [verification.md](verification.md)。
 
 ## 脚本参数
 
-### `scripts/new-wpf-harness.ps1`
+### `scripts/new-agent-harness.ps1`
 
 生成一个新的 `RenderHarness` 工程，返回 `[pscustomobject]@{ WorkDir; ProjectPath; ConfigPath; TargetFramework; Platform }`。
 
@@ -12,7 +12,8 @@
 | --- | --- | --- | --- |
 | `-TargetFramework` | string | 自动 | `net472` / `net48` / `net481`，或 `net5.0-windows` … `net10.0-windows`（可带平台版本，如 `net8.0-windows10.0.19041.0`）。省略时读取 `-AssemblyPath` 的 `TargetFrameworkAttribute`：取同类中最高版本，低于 4.7.2 的 .NET Framework 程序集用 `net472`；没有业务程序集时为 `net8.0-windows`。显式指定但与业务程序集不兼容（类别不同或版本更低）时报错 |
 | `-Platform` | string | 自动 | `AnyCPU` / `x86` / `x64` / `ARM64`，写入 `PlatformTarget`。省略时读取 `-AssemblyPath` 的 PE 头：存在 x86 程序集（含 C++/CLI 混合程序集与“首选 32 位”的 exe）或 x64 / ARM64 程序集就跟随它，否则 `AnyCPU`；要求冲突时报错 |
-| `-WorkDir` | string | `%TEMP%\wpf-render-<GUID>` | 工程目录；**已存在则拒绝覆盖** |
+| `-Stack` | string | 自动 | `wpf` / `avalonia`。省略时按程序集引用识别；两者混引、未知值或 Avalonia 程序集面向 .NET Framework 时报错。Avalonia 宿主使用不带 `-windows` 的 net8.0 及以上 TFM，跟随业务程序集的 Avalonia 11.x 版本（不低于 11.3.22） |
+| `-WorkDir` | string | `%TEMP%\agent-render-<GUID>` | 工程目录；**已存在则拒绝覆盖** |
 | `-AssemblyPath` | string[] | 空 | 要引用的业务程序集（`.dll`，或 .NET Framework WPF 程序的 `.exe`）；以 `HintPath` + `Private=true` 写入 csproj（路径做 XML 转义，可含空格）。.NET Framework 与 .NET 程序集不能混用 |
 | `-ViewType` | string | 空 | 要渲染的 View 类型（完整名或程序集限定名），需有无参构造；与 `-Xaml` 二选一 |
 | `-Xaml` | string | 空 | 松散 XAML 文件（无 `x:Class` / 事件），可经 `clr-namespace;assembly=` 引用业务控件 |
@@ -25,9 +26,9 @@
 | `-Animations` | string | `live` | `settle`：每次步骤截图前把事件触发器启动的 Storyboard 跳到结束状态 |
 | `-InferOnly` | switch | 关 | 只推断并返回 `TargetFramework` / `Platform`，不生成工程 |
 
-相对路径（`-WorkDir`、`-AssemblyPath`、`-Xaml` 等）按 PowerShell 当前位置解析，UNC 路径可直接使用。视图参数写入 `harness.json`，渲染时才读取；之后修改它或 XAML 文件只需 `-NoBuild` 重新渲染。工程同时写入空的 `Directory.Build.props` / `.targets`、关闭集中包管理的 `Directory.Packages.props` 与空的 `global.json`，放在业务仓库里也不会继承上层构建配置。`dotnet` 按**当前目录**查找 `global.json`，`invoke-wpf-render.ps1` 因此在宿主目录内执行构建，业务仓库锁定的 SDK 版本不影响宿主。
+相对路径（`-WorkDir`、`-AssemblyPath`、`-Xaml` 等）按 PowerShell 当前位置解析，UNC 路径可直接使用。视图参数写入 `harness.json`，渲染时才读取；之后修改它或 XAML 文件只需 `-NoBuild` 重新渲染。工程同时写入空的 `Directory.Build.props` / `.targets`、关闭集中包管理的 `Directory.Packages.props` 与空的 `global.json`，放在业务仓库里也不会继承上层构建配置。`dotnet` 按**当前目录**查找 `global.json`，`invoke-agent-render.ps1` 因此在宿主目录内执行构建，业务仓库锁定的 SDK 版本不影响宿主。
 
-生成的 csproj 关键属性：`OutputType=Exe`、`UseWPF=true`、`ImplicitUsings`、`Nullable`、`LangVersion=latest`、`PlatformTarget`。启动方式由 TFM 和位数决定：
+生成的 csproj 关键属性：`OutputType=Exe`、`ImplicitUsings`、`Nullable`、`LangVersion=latest`、`PlatformTarget`；WPF 宿主另有 `UseWPF=true`，Avalonia 宿主引用 `Avalonia` / `Avalonia.Headless` / `Avalonia.Skia` 等 11.x 包。启动方式由 TFM 和位数决定：
 
 | 宿主 | 启动方式 |
 | --- | --- |
@@ -35,23 +36,26 @@
 | .NET，`AnyCPU` | `UseAppHost=false`，通过 `dotnet RenderHarness.dll` 启动；`RollForward=Major`，本机没有该主版本的 WindowsDesktop 运行时时使用更高版本 |
 | .NET，固定 `x86` / `x64` / `ARM64` | `UseAppHost=true`，运行对应架构的 `RenderHarness.exe`，需安装该架构的 WindowsDesktop Runtime |
 
-宿主源码只使用 .NET Framework 4.7.2 与 .NET 5+ 共有的 API（不依赖 `System.Text.Json` 等 NuGet 包），同一份 `Program.cs` / `ConfiguredView.cs` / `ViewFactory.cs` 适用于全部 TFM。定制 `ViewFactory.cs` 时同样只能用目标 TFM 存在的 API。.NET 5 / 6 / 7 已停止支持，构建时会出现 `NETSDK1138` 警告，不影响渲染。
+Avalonia 宿主使用相同的启动方式，但只需要对应版本的 .NET 运行时，不依赖 WindowsDesktop Runtime。
+
+WPF 宿主源码只使用 .NET Framework 4.7.2 与 .NET 5+ 共有的 API（不依赖 `System.Text.Json` 等 NuGet 包），同一份 `Program.cs` / `ConfiguredView.cs` / `ViewFactory.cs` 适用于全部 WPF TFM。Avalonia 宿主要求 .NET 8 及以上，使用 Headless + Skia 渲染，不能加载 .NET Framework 程序集。定制 `ViewFactory.cs` 时同样只能用目标技术栈与 TFM 存在的 API。.NET 5 / 6 / 7 已停止支持，构建时会出现 `NETSDK1138` 警告，不影响渲染。
 
 ### `scripts/render.ps1`
 
-一步渲染，适合免代码接入。参数是 `new-wpf-harness.ps1` 的视图 / 程序集参数（`-AssemblyPath`、`-ViewType`、`-Xaml`、`-DataContextType`、`-DataContextFactory`、`-ResourceDictionary`、`-FactoryFile`、`-TargetFramework`、`-Platform`）加上 `invoke-wpf-render.ps1` 的渲染参数（`-Width`、`-Height`、`-Background`、`-WindowHost`、`-Element`、`-TimeoutSeconds`），另有：
+一步渲染，适合免代码接入。参数是 `new-agent-harness.ps1` 的视图 / 程序集参数（`-Stack`、`-AssemblyPath`、`-ViewType`、`-Xaml`、`-DataContextType`、`-DataContextFactory`、`-ResourceDictionary`、`-FactoryFile`、`-TargetFramework`、`-Platform`）加上 `invoke-agent-render.ps1` 的渲染参数（`-Width`、`-Height`、`-Background`、`-WindowHost`、`-Element`、`-TimeoutSeconds`），另有：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
+| `-Stack` | 自动 | `wpf` / `avalonia`；省略时按程序集引用识别 |
 | `-Theme` | `light` | 可传多个，如 `-Theme light, dark` |
 | `-Dpi` | `96` | 可传多个，如 `-Dpi 96, 144` |
 | `-Size` | 无 | 多个视口，如 `-Size 1280x800, 800x600`；指定后忽略 `-Width` / `-Height` |
 | `-FactoryFile` | 无 | 同生成器；内容变化时重新构建缓存宿主 |
-| `-Steps` / `-ContinueOnError` / `-Animations` | 无 / 关 / `live` | 同生成器；步骤不能与多个主题 / 尺寸 / DPI 同时使用 |
-| `-Preset` | 无 | `wpf-render.json` 中的视图名，见 [integration.md](integration.md#业务项目接入wpf-renderjson) |
-| `-Config` | 从当前目录向上查找 | `wpf-render.json` 的路径或其所在目录 |
+| `-Steps` / `-ContinueOnError` / `-Animations` | 无 / 关 / `live` | 同生成器；步骤不能与多个主题 / 尺寸 / DPI 同时使用；Avalonia 宿主不支持 |
+| `-Preset` | 无 | `agent-render.json`（兼容旧 `wpf-render.json`）中的视图名，见 [integration.md](integration.md#业务项目接入agent-renderjson兼容旧-wpf-renderjson) |
+| `-Config` | 从当前目录向上查找 | `agent-render.json`（兼容旧 `wpf-render.json`）的路径或其所在目录 |
 | `-Build` | 关 | 渲染前在配置目录执行预设的 `build` 命令，失败时抛出并附构建日志末尾 |
-| `-CacheRoot` | `%TEMP%\wpf-render-cache` | 缓存宿主所在目录；清理只处理本工具创建的缓存目录（16 位十六进制名称），不会删除其中的其他内容 |
+| `-CacheRoot` | `%TEMP%\agent-render-cache` | 缓存宿主所在目录；清理只处理本工具创建的缓存目录（16 位十六进制名称），不会删除其中的其他内容 |
 | `-NoCache` | 关 | 生成一次性宿主，不读写缓存 |
 | `-RetentionDays` | `7` | 超过该天数未使用的缓存宿主与渲染结果会被自动删除（作为兜底清理；验证完且确认无用的快照输出目录应由 Agent 主动删除） |
 
@@ -59,22 +63,23 @@
 
 使用 `-Preset` 时显式参数覆盖预设，视图中的设置覆盖 `defaults`，互斥的参数按组覆盖（视图写了 `xaml` 时不继承 `defaults` 的 `viewType`，写了 `width` / `height` 时不继承 `sizes`，以此类推）：显式 `-ViewType` / `-Xaml` 覆盖预设的 `viewType` 与 `xaml`，显式 `-DataContextType` / `-DataContextFactory` 覆盖预设的两者，显式 `-Width` / `-Height` 覆盖预设的 `sizes`。主题、DPI、尺寸的组合不能为空。
 
-**单个组合**时输出与退出码同 `invoke-wpf-render.ps1`。**多个组合**（主题 × 尺寸 × DPI）时最多构建一次，每个组合在独立进程中渲染，然后在缓存宿主下新建 `matrix-<时间>-<id>` 目录并返回它：
+**单个组合**时输出与退出码同 `invoke-agent-render.ps1`。**多个组合**（主题 × 尺寸 × DPI）时最多构建一次，每个组合在独立进程中渲染，然后在缓存宿主下新建 `matrix-<时间>-<id>` 目录并返回它：
 
 | 文件 | 内容 |
 | --- | --- |
-| `matrix.json` | `status`（`ok` / `binding-issues` / `failed`）、`combinations`、`rendered`、`overview`，以及每个组合的 `theme` / `size` / `dpi` / `status` / `bindingTraceVerified` / `snapshot` / 绑定与布局问题 / `outDir` |
+| `matrix.json` | `status`（`ok` / `binding-issues` / `failed`）、`combinations`、`rendered`、`overview`，以及每个组合的 `stack` / `theme` / `size` / `dpi` / `status` / `bindingTraceVerified` / `snapshot` / 绑定与布局问题 / `outDir` |
 | `overview.png` | 全部截图缩放到 480 像素宽后拼成的总览图，每张标注主题、尺寸、DPI 与状态，一次查看即可对比 |
 
 多组合的退出码取最严重者：任一组合失败为 `1`，否则任一绑定问题为 `2`，否则 `0`。构建失败时不再渲染其余组合。
 
-### `scripts/invoke-wpf-render.ps1`
+### `scripts/invoke-agent-render.ps1`
 
 构建（输出到工程内 `out\`）并渲染一次，打印 JSON 摘要，输出目录路径写入管道，退出码写入 `$LASTEXITCODE`。
 
 | 参数 | 类型 | 默认值 | 范围 | 说明 |
 | --- | --- | --- | --- | --- |
-| `-HarnessDir` | string | **必填** | — | `new-wpf-harness.ps1` 返回的 `WorkDir` |
+| `-HarnessDir` | string | **必填** | — | `new-agent-harness.ps1` 返回的 `WorkDir` |
+| `-Stack` | string | `wpf` | `wpf` / `avalonia`；直接调用时需与生成宿主时一致（`render.ps1` 会自动传入） |
 | `-Width` | int | `1280` | 1–6000 | 视口宽度（DIP） |
 | `-Height` | int | `800` | 1–6000 | 视口高度（DIP） |
 | `-Dpi` | int | `96` | 48–384 | 输出位图 DPI，决定像素尺寸 |
@@ -87,17 +92,21 @@
 
 额外保护：输出像素总数超过 6000 万（例如 6000×6000 DIP @ 192 DPI）时直接拒绝执行。
 
+### Avalonia 宿主
+
+`-Stack avalonia`（或按程序集引用自动识别）时，宿主使用 Avalonia 11.x Headless + Skia，TFM 为不带 `-windows` 的 net8.0 及以上。当前支持类型视图、松散 AXAML、DataContext、主题 / 尺寸 / DPI、绑定错误、布局检查、元素截图与 `compare_snapshots`；`layout.json` 的节点、坐标与五类布局问题与 WPF 契约一致。`-WindowHost` 直接失败（`failed:render`，退出码 1），`-Steps` 返回 `failed:step`（退出码 3），不会静默忽略。资源使用 `avares://` 或文件路径，不接受 WPF 的 `pack://`。
+
 ### `scripts/trust-project.ps1`
 
-授权业务项目的 `wpf-render.json`，使结束前自动验证（Stop hook）生效。
+授权业务项目的 `agent-render.json`（兼容旧 `wpf-render.json`），使结束前自动验证（Stop hook）生效。
 
 | 用法 | 说明 |
 | --- | --- |
-| `trust-project.ps1 [-Path <目录或文件>]` | 授权当前目录（或向上最近）的 `wpf-render.json`，并列出 hook 将执行的构建命令 |
+| `trust-project.ps1 [-Path <目录或文件>]` | 授权当前目录（或向上最近）的 `agent-render.json` / `wpf-render.json`，并列出 hook 将执行的构建命令 |
 | `trust-project.ps1 -List` | 列出已授权的配置及状态（已授权 / 授权后已修改 / 文件不存在） |
 | `trust-project.ps1 -Revoke [-Path …]` | 撤销授权；配置文件已删除或移动时按原路径撤销 |
 
-授权记录默认在 `%LOCALAPPDATA%\wpf-offscreen-render\trusted-projects.json`（可用环境变量 `WPF_RENDER_TRUST_FILE` 改位置），绑定配置文件内容的 SHA256。
+授权记录默认在 `%LOCALAPPDATA%\agent-render\trusted-projects.json`（可用环境变量 `AGENT_RENDER_TRUST_FILE` 改位置，兼容旧的 `WPF_RENDER_TRUST_FILE`；默认位置的旧授权库会一次性迁入），绑定配置文件内容的 SHA256。
 
 ### `scripts/compare-snapshots.ps1`
 

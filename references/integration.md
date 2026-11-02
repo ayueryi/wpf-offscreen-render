@@ -1,8 +1,8 @@
-# 接入真实 WPF 界面
+# 接入真实 WPF / Avalonia 界面
 
-## 业务项目接入：wpf-render.json
+## 业务项目接入：agent-render.json（兼容旧 wpf-render.json）
 
-把要验证的视图登记在业务仓库根目录的 `wpf-render.json` 中，代理就能按名称渲染（MCP `render_view` 的 `config` + `preset`，或 `render.ps1 -Config <目录> -Preset <名称>`），结束本轮前的 Stop hook 也据此自动验证。完整示例见 [templates/wpf-render.json](../templates/wpf-render.json)。
+把要验证的视图登记在业务仓库根目录的 `agent-render.json`（旧项目可继续用 `wpf-render.json`）中，代理就能按名称渲染（MCP `render_view` 的 `config` + `preset`，或 `render.ps1 -Config <目录> -Preset <名称>`），结束本轮前的 Stop hook 也据此自动验证。完整示例见 [templates/agent-render.json](../templates/agent-render.json)。
 
 | 字段 | 位置 | 说明 |
 | --- | --- | --- |
@@ -10,7 +10,8 @@
 | `blockOnLayoutIssues` | 顶层 | `true` 时布局问题也会阻止结束；默认只有渲染失败与绑定错误会阻止 |
 | `defaults` | 顶层 | 各视图共用的设置，视图中的同名字段覆盖它 |
 | `views.<名称>` | 顶层 | 一个视图预设 |
-| `assemblyPaths`、`xaml`、`factoryFile` | 预设 | 相对路径相对于 `wpf-render.json` 所在目录 |
+| `stack` | 预设 | `wpf` / `avalonia`；省略时按程序集引用自动识别 |
+| `assemblyPaths`、`xaml`、`factoryFile` | 预设 | 相对路径相对于配置文件所在目录 |
 | `viewType`、`dataContextType`、`dataContextFactory` | 预设 | 同 `render.ps1` 的同名参数；`dataContextFactory` 为无参静态方法 `Namespace.Type.Method` |
 | `resourceDictionaries` | 预设 | pack URI 原样使用，其余相对路径相对于配置目录；`{theme}` 替换为主题 |
 | `themes`、`sizes`、`dpis` | 预设 | 多个值时得到多组合汇总（`matrix.json` 与总览图） |
@@ -27,20 +28,22 @@
 2. `dataContextFactory`：无参静态工厂方法，适合需要构造参数、stub 服务或填充样例数据的 ViewModel，例如在业务项目中放一个 `PreviewData.CreateOrderList()`。
 3. `factoryFile`：业务仓库中受版本管理的 `ViewFactory.cs`，替换宿主默认工厂；可以配置资源、等待异步就绪、设置选中态和清理。形状见下文“资源、主题和 DataContext”，三个方法签名不能改。工厂文件内容变化时宿主自动重新构建。
 
-**授权**：Stop hook 会执行配置中的 `build` 命令并运行业务程序集，因此只对用户显式授权的配置生效。在本机运行 `scripts/trust-project.ps1 -Path <业务仓库目录>` 授权（`-List` 查看、`-Revoke` 撤销）；授权记录保存在 `%LOCALAPPDATA%\wpf-offscreen-render\trusted-projects.json`，绑定 `wpf-render.json` 的内容哈希，配置被修改后需要重新授权。未授权时 hook 不执行任何构建或渲染，每个会话只提示一次。
+**授权**：Stop hook 会执行配置中的 `build` 命令并运行业务程序集，因此只对用户显式授权的配置生效。在本机运行 `scripts/trust-project.ps1 -Path <业务仓库目录>` 授权（`-List` 查看、`-Revoke` 撤销）；授权记录保存在 `%LOCALAPPDATA%\agent-render\trusted-projects.json`，绑定配置文件内容（`agent-render.json` 或旧的 `wpf-render.json`）的哈希，配置被修改后需要重新授权。未授权时 hook 不执行任何构建或渲染，每个会话只提示一次。
 
-**Stop hook 的行为**：代理结束本轮前，hook 从会话目录向上找到 `wpf-render.json`；`verifyOnStop` 为 `true` 且已授权时，用 `git status` 找出未提交的改动，渲染 `watch` 命中的视图（先执行一次 `build`）。有渲染失败或绑定错误时阻止结束，并把结论（视图、绑定路径、截图路径）交给代理继续修复；同一份改动只验证一次，代理确认无法修复时不会被反复拦截。没有 `wpf-render.json`、未启用或非 Windows 时立即退出。
+**Stop hook 的行为**：代理结束本轮前，hook 从会话目录向上找到 `agent-render.json`（没有时兼容旧的 `wpf-render.json`）；`verifyOnStop` 为 `true` 且已授权时，用 `git status` 找出未提交的改动，渲染 `watch` 命中的视图（先执行一次 `build`）。有渲染失败或绑定错误时阻止结束，并把结论（视图、绑定路径、截图路径）交给代理继续修复；同一份改动只验证一次，代理确认无法修复时不会被反复拦截。没有配置文件、未启用或非 Windows 时立即退出。
 
 **代理规则**：把 [templates/agent-rules.md](../templates/agent-rules.md) 的内容加入业务仓库的 `AGENTS.md`（Antigravity、Codex 等）或 `CLAUDE.md`（Claude Code），约定修改界面后必须渲染验证并在回复中给出结论。
 
 ## 工程和程序集
 
-本工具的工程独立于业务仓库，只有 WPF 和 .NET 依赖。使用 Windows + PowerShell 7。支持的宿主 TFM：`net472`、`net48`、`net481` 与 `net5.0-windows` … `net10.0-windows`（可带平台版本）。确认 `dotnet --list-sdks` 能构建该 TFM；.NET 宿主还需 `dotnet --list-runtimes` 中有对应的 WindowsDesktop Runtime，.NET Framework 宿主需本机已装对应版本的 .NET Framework，并有 Developer Pack 或 NuGet 访问来获取引用程序集。
+Avalonia 本期只支持初始截图、主题 / 尺寸 / DPI、绑定错误、布局检查、元素截图与快照对比；`windowHost` 和交互步骤（`steps`）会明确失败。资源使用 `avares://` 或文件路径，不接受 WPF 的 `pack://`。
+
+本工具的工程独立于业务仓库，只依赖 WPF 或 Avalonia 与 .NET。使用 Windows + PowerShell 7。WPF 宿主 TFM：`net472`、`net48`、`net481` 与 `net5.0-windows` … `net10.0-windows`（可带平台版本）；Avalonia 宿主为不带 `-windows` 的 net8.0 及以上，要求业务程序集引用 Avalonia 11.x，不支持 .NET Framework 程序集。确认 `dotnet --list-sdks` 能构建该 TFM；WPF 的 .NET 宿主还需 `dotnet --list-runtimes` 中有对应的 WindowsDesktop Runtime，Avalonia 宿主只需要 .NET 8+ 运行时（Skia 随 NuGet 包提供），.NET Framework 宿主需本机已装对应版本的 .NET Framework，并有 Developer Pack 或 NuGet 访问来获取引用程序集。
 
 生成时引用已经构建的程序集：
 
 ```powershell
-$harness = & "$skillRoot\scripts\new-wpf-harness.ps1" `
+$harness = & "$skillRoot\scripts\new-agent-harness.ps1" `
     -AssemblyPath 'C:\work\MyApp\bin\Debug\net8.0-windows\MyApp.dll', `
                   'C:\work\MyApp\bin\Debug\net8.0-windows\MyUi.dll'
 $harness | Select-Object TargetFramework, Platform
@@ -63,7 +66,7 @@ $harness | Select-Object TargetFramework, Platform
 满足以下条件时，不必修改 `ViewFactory.cs`：View 和 DataContext 都有无参构造（可以是 non-public），资源只需要按顺序合并字典，并且不需要等待异步就绪。这种情况优先用 `scripts/render.ps1` 一步渲染：参数与下例相同，宿主会被缓存，程序集未变时跳过构建。
 
 ```powershell
-$harness = & "$skillRoot\scripts\new-wpf-harness.ps1" -AssemblyPath $myUiDll `
+$harness = & "$skillRoot\scripts\new-agent-harness.ps1" -AssemblyPath $myUiDll `
     -ViewType MyUi.Views.OrderView `
     -DataContextType MyUi.Preview.OrderPreviewVm `
     -ResourceDictionary '/MyUi;component/Themes/Generic.xaml', '/MyUi;component/Themes/{theme}.xaml'
@@ -72,7 +75,7 @@ $harness = & "$skillRoot\scripts\new-wpf-harness.ps1" -AssemblyPath $myUiDll `
 - `-ViewType` / `-DataContextType`：可以写完整类型名（会在已加载程序集和输出目录的 DLL 中查找），也可以写程序集限定名 `Ns.Type, Assembly`。
 - `-Xaml`：松散 XAML 文件，与 `-ViewType` 二选一。不能写 `x:Class` 和事件处理器；业务控件通过 `xmlns:v="clr-namespace:MyUi.Views;assembly=MyUi"` 引用，对应程序集需在 `-AssemblyPath` 中。适合快速拼一个探针布局或组合多个控件。
 - `-ResourceDictionary`：按给定顺序合并到 `Application.Current.Resources`。支持 pack URI 或磁盘绝对路径，`{theme}` 替换为 `-Theme` 的值。
-- 手工编辑 `harness.json` 时键名区分大小写（`viewType`、`xaml`、`dataContextType`、`resourceDictionaries`）。
+- 手工编辑 `harness.json` 时键名区分大小写（`stack`、`viewType`、`xaml`、`dataContextType`、`resourceDictionaries`）。
 - 这些参数都写入生成工程的 `harness.json`，渲染时才读取。修改它或 XAML 文件后，可以直接 `-NoBuild` 再渲染。
 
 超出上述条件时（VM 需要参数或 stub 服务、需要 Bootstrap、需要等待加载完成或设置选中态），按下文修改 `ViewFactory.cs`。默认的 `ViewFactory.Create` 会先尝试 `harness.json`，未配置视图时才走样例。整体替换 `ViewFactory.cs` 后，`harness.json` 中的视图配置就不再生效。
@@ -133,7 +136,7 @@ internal static class ViewFactory
 需要 Loaded、窗口祖先绑定、ActualWidth 承载、主题窗口挂接时：
 
 ```powershell
-$outDir = & "$skillRoot\scripts\invoke-wpf-render.ps1" `
+$outDir = & "$skillRoot\scripts\invoke-agent-render.ps1" `
     -HarnessDir $harness.WorkDir -WindowHost -Width 1100 -Height 760 -Theme dark
 ```
 

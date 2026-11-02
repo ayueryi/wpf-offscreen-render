@@ -1,6 +1,30 @@
 # 更新日志
 
-版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`plugin.json`、`mcp/WpfRenderMcp/WpfRenderMcp.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
+版本号记录在 `VERSION`，并与 `.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`plugin.json`、`mcp/AgentRender/AgentRender.csproj` 保持一致（`tests/validate-plugins.ps1` 检查）。渲染结果的 `manifest.json` / `summary.json` 记录生成它的 `toolVersion`。
+
+## 2.0.0 – 2026-11-02
+
+### Agent Render 多技术栈宿主
+- 公开插件名、MCP 服务器和 skill 改为 `agent-render`；旧的 `wpf-offscreen-render` 配置文件、环境变量和脚本入口保留兼容读取。
+- WPF 宿主移入 `assets/wpf`，新增 Avalonia 11.3.22 Headless + Skia 宿主，使用 `RenderTargetBitmap` 输出确定性 PNG。
+- `render.ps1` 新增 `-Stack wpf|avalonia`，未指定时按业务程序集引用自动识别；结果摘要新增 `stack`。
+- Avalonia 支持类型视图、运行时 AXAML、DataContext、主题、布局检查、元素截图和绑定错误日志；交互步骤与 `windowHost` 明确拒绝。
+- 预设优先读取 `agent-render.json`，继续兼容 `wpf-render.json`。
+
+### review 后修复
+- Avalonia 视图改为挂到屏外无头窗口再出图：此前游离控件没有应用样式，Button 等模板化控件整块空白而状态仍为 `ok`；新增像素断言防止回归。
+- Avalonia `layout.json` 与 WPF 契约对齐：节点深度优先并带真实 `depth`，矩形为截图坐标，`clipped` 按祖先 `ClipToBounds` 判定。
+- Avalonia 宿主的 TFM、位数与 Avalonia 包版本跟随业务程序集（不低于 net8.0 / 11.3.22，拒绝 .NET Framework 与非 11.x）；缓存宿主在版本变化时重新生成。
+- 技术栈判定：WPF 与 Avalonia 混合引用时报错，不再把 `WindowsBase` 当作 WPF 依据，未知 `-Stack` 报错。
+- 授权：`trust-project.ps1` 支持 `agent-render.json` 与旧的 `wpf-render.json`；默认位置的旧授权库一次性迁入新位置。
+- 预设里的 `avares://` 资源不再被改写成文件路径；Avalonia 宿主结果写完后直接结束进程，避免业务前台线程造成超时。
+- CI 改指向 `mcp/AgentRender.Tests`。
+- 明确 DPI 行为：无头窗口 `RenderScaling` 固定为 1，请求的 DPI 只放大输出位图。
+
+### 检查
+- WPF Quick 回归：2 通过，0 失败。
+- MCP 客户端回归：10 通过，0 失败。
+- Avalonia 内置渲染、松散 AXAML、绑定错误和 steps 拒绝路径通过。
 
 ## 1.4.0 – 2026-10-28
 

@@ -1,7 +1,7 @@
 #requires -Version 7.0
-# 授权业务项目的 wpf-render.json，使结束前自动验证（Stop hook）生效。
+# 授权业务项目的 agent-render.json（兼容旧的 wpf-render.json），使结束前自动验证（Stop hook）生效。
 # hook 会执行配置中的 build 命令并运行业务程序集，请只授权自己信任的仓库；配置修改后需要重新授权。
-#   trust-project.ps1                 授权当前目录（或向上最近）的 wpf-render.json
+#   trust-project.ps1                 授权当前目录（或向上最近）的 agent-render.json / wpf-render.json
 #   trust-project.ps1 -Path <目录或文件>
 #   trust-project.ps1 -Revoke         撤销授权
 #   trust-project.ps1 -List           列出已授权的配置
@@ -30,25 +30,27 @@ if ($List) {
 # 不能向上找到父目录的配置并误撤销它。
 if ($Revoke) {
     $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
-    if ((Test-Path -LiteralPath $full -PathType Container) -or [IO.Path]::GetFileName($full) -ne 'wpf-render.json') { $full = Join-Path $full 'wpf-render.json' }
-    if (-not (Test-Path -LiteralPath $full)) {
-        $target = $full.Replace('\', '/')
+    # 给的是配置文件就只看它；否则当作目录，两种文件名（agent-render.json / 旧的 wpf-render.json）都是候选。
+    $candidates = if ([IO.Path]::GetFileName($full) -in $script:ConfigFileNames) { @($full) }
+        else { @($script:ConfigFileNames | ForEach-Object { Join-Path $full $_ }) }
+    if (-not ($candidates | Where-Object { Test-Path -LiteralPath $_ })) {
+        $targets = @($candidates | ForEach-Object { $_.Replace('\', '/') })
         $all = @(Read-TrustStore)
-        $kept = @($all | Where-Object { $_.config -ine $target })
+        $kept = @($all | Where-Object { $recorded = $_.config; -not ($targets | Where-Object { $_ -ieq $recorded }) })
         if ($kept.Count -lt $all.Count) {
             Write-TrustStore $kept
-            Write-Output "已撤销授权：$target"
+            Write-Output "已撤销授权：$($targets -join '、')"
             return
         }
-        if (-not (Test-Path -LiteralPath $Path)) { throw "没有找到 $target 的授权记录（-List 查看已授权的配置）。" }
+        if (-not (Test-Path -LiteralPath $Path)) { throw "没有找到 $($targets -join '、') 的授权记录（-List 查看已授权的配置）。" }
     }
 }
 
 if (Test-Path -LiteralPath $Path -PathType Container) {
     $dir = (Resolve-Path -LiteralPath $Path).ProviderPath
-    while ($dir -and -not (Test-Path -LiteralPath (Join-Path $dir 'wpf-render.json'))) { $dir = Split-Path -Parent $dir }
-    if (-not $dir) { throw "从 $Path 向上没有找到 wpf-render.json。" }
-    $Path = Join-Path $dir 'wpf-render.json'
+    while ($dir -and -not (Find-ConfigFile $dir)) { $dir = Split-Path -Parent $dir }
+    if (-not $dir) { throw "从 $Path 向上没有找到 agent-render.json（或旧的 wpf-render.json）。" }
+    $Path = Find-ConfigFile $dir
 }
 $identity = Get-ConfigIdentity $Path
 $others = @(Read-TrustStore | Where-Object { $_.config -ine $identity.Config })
