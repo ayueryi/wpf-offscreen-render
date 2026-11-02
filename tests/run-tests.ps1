@@ -149,7 +149,7 @@ function Test-CacheCleanup($case) {
     }
     # 同一线程可以重入互斥量，因此由另一个进程持有。Start-Process 不给参数加引号，脚本用 -EncodedCommand 传递。
     $signal = Join-Path $ArtifactsDir "$($case.Name)-held"
-    $holdScript = "`$m = [Threading.Mutex]::new(`$false, 'Local\wpf-render-$busy'); `$null = `$m.WaitOne(); Set-Content -LiteralPath '$signal' -Value 1; Start-Sleep -Seconds 120"
+    $holdScript = "`$m = [Threading.Mutex]::new(`$false, 'Local\agent-render-$busy'); `$null = `$m.WaitOne(); Set-Content -LiteralPath '$signal' -Value 1; Start-Sleep -Seconds 120"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($holdScript))
     $holder = Start-Process -FilePath 'pwsh' -PassThru -WindowStyle Hidden -ArgumentList "-NoProfile -EncodedCommand $encoded"
     try {
