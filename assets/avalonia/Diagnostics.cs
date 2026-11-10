@@ -37,24 +37,13 @@ internal static class BindingIssues
 // 不计入渲染变换（RenderTransform 等）。
 internal static class LayoutReport
 {
-    private const int MaxNodes = 3000;
-    private const int MaxOverlapCandidates = 400;
-    private const double Tolerance = 1.0;
+    private const double Tolerance = LayoutReportBuilder.Tolerance;
     // 足够大的有限矩形表示“无裁切”。
     private static readonly Rect Unbounded = new(-1e7, -1e7, 2e7, 2e7);
 
-    private sealed record Ink(string Label, Rect Rect);
-
     public static (List<KeyValuePair<string, object?>> Report, int IssueCount) Inspect(Control root, double width, double height)
     {
-        var nodes = new List<object?>();
-        var issues = new List<object?>();
-        var inks = new List<Ink>();
-        var viewport = new Rect(0, 0, width, height);
-        var truncated = false;
-
-        void Report(string kind, string label, string message, Rect rect) =>
-            issues.Add(Json.Object(("kind", kind), ("element", label), ("message", message), ("rect", Box(rect))));
+        var report = new LayoutReportBuilder();
 
         // overflowClip：祖先中会裁切子元素的布局溢出（ClipToBounds）的交集；ScrollViewer 视口是有意裁切，不计入。
         void Walk(Visual node, int depth, Rect overflowClip, bool placementReported)
@@ -65,39 +54,35 @@ internal static class LayoutReport
                 var rect = AbsoluteRect(element, root);
                 var label = Label(element);
                 var text = (element as TextBlock)?.Text;
-                if (nodes.Count < MaxNodes)
-                {
-                    nodes.Add(Json.Object(("depth", depth), ("type", TypeName(element)),
-                        ("name", string.IsNullOrEmpty(element.Name) ? null : element.Name), ("rect", Box(rect)), ("text", Shorten(text, 80))));
-                }
-                else truncated = true;
+                report.AddNode(depth, TypeName(element), element.Name, rect.X, rect.Y, rect.Width, rect.Height, text);
 
                 var isContent = element is TextBlock { Text.Length: > 0 } || element is Image { Source: not null } || element is TemplatedControl;
                 if (isContent)
                 {
                     if (rect.Width < 0.5 || rect.Height < 0.5)
                     {
-                        // 模板化控件的外壳可能因父容器压缩为 0；与 WPF 一致，只对非 Control 内容报 zero-size 之外的情形留给文本检查。
-                        Report("zero-size", label, $"布局尺寸为 {Size(rect.Width, rect.Height)}，内容不可见", rect);
+                        // 模板化控件的外壳可能因父容器压缩为 0，与 WPF 一致不报；只报真正的内容。
+                        report.ZeroSize(element is TemplatedControl, label, rect.Width, rect.Height, rect.X, rect.Y, rect.Width, rect.Height);
                     }
                     else if (!placementReported)
                     {
+                        var shown = overflowClip.Intersect(rect);
                         if (!Contains(overflowClip, rect))
                         {
-                            Report("clipped", label, $"被祖先裁切：元素 {Size(rect.Width, rect.Height)}，可见区域 {Describe(overflowClip.Intersect(rect))}", rect);
+                            report.Clipped(label, rect.Width, rect.Height, Positive(shown.Width), Positive(shown.Height), rect.X, rect.Y, rect.Width, rect.Height);
                             placementReported = true;
                         }
-                        else if (rect.X < -Tolerance || rect.Y < -Tolerance || rect.Right > viewport.Right + Tolerance || rect.Bottom > viewport.Bottom + Tolerance)
+                        else if (rect.X < -Tolerance || rect.Y < -Tolerance || rect.Right > width + Tolerance || rect.Bottom > height + Tolerance)
                         {
-                            Report("out-of-viewport", label, $"超出 {Size(width, height)} 视口", rect);
+                            report.OutOfViewport(label, width, height, rect.X, rect.Y, rect.Width, rect.Height);
                             placementReported = true;
                         }
                     }
 
                     if (element is TextBlock { Text.Length: > 0 } textBlock && rect.Width >= 0.5 && rect.Height >= 0.5)
                     {
-                        var ink = CheckText(textBlock, rect, label, Report);
-                        if (ink is { } inkRect && inks.Count < MaxOverlapCandidates) inks.Add(new Ink(label, inkRect));
+                        var ink = CheckText(textBlock, rect, label, report);
+                        if (ink is { } inkRect) report.AddInk(label, inkRect.X, inkRect.Y, inkRect.Width, inkRect.Height);
                     }
                 }
 
@@ -111,23 +96,7 @@ internal static class LayoutReport
         }
 
         Walk(root, 0, Unbounded, false);
-
-        // 文本墨迹互相覆盖通常是布局错误（同一单元格、负边距、绝对定位冲突）。
-        for (var i = 0; i < inks.Count; i++)
-        {
-            for (var j = i + 1; j < inks.Count; j++)
-            {
-                var overlap = inks[i].Rect.Intersect(inks[j].Rect);
-                if (overlap.Width <= 0 || overlap.Height <= 0) continue;
-                var area = overlap.Width * overlap.Height;
-                var smaller = Math.Min(Area(inks[i].Rect), Area(inks[j].Rect));
-                if (area > 4 && area > smaller * 0.15)
-                    Report("overlap", inks[i].Label, $"与 {inks[j].Label} 的文本重叠 {Size(overlap.Width, overlap.Height)}", overlap);
-            }
-        }
-
-        return (Json.Object(("viewport", Box(viewport)), ("nodeCount", nodes.Count), ("nodesTruncated", truncated),
-            ("issueCount", issues.Count), ("issues", issues), ("nodes", nodes)), issues.Count);
+        return report.Build(width, height);
     }
 
     // 元素在根元素（截图）坐标系中的矩形。Bounds 是相对父元素的，不能直接用。
@@ -139,7 +108,7 @@ internal static class LayoutReport
     }
 
     // 检查文本是否放得下，返回文本墨迹在截图坐标中的矩形（用于重叠检查）；无法测量时返回 null。
-    private static Rect? CheckText(TextBlock textBlock, Rect rect, string label, Action<string, string, string, Rect> report)
+    private static Rect? CheckText(TextBlock textBlock, Rect rect, string label, LayoutReportBuilder report)
     {
         try
         {
@@ -149,17 +118,18 @@ internal static class LayoutReport
             var formatted = new FormattedText(textBlock.Text!, CultureInfo.CurrentUICulture, textBlock.FlowDirection,
                 new Typeface(textBlock.FontFamily, textBlock.FontStyle, textBlock.FontWeight, textBlock.FontStretch),
                 textBlock.FontSize, Brushes.Black);
-            var trimming = textBlock.TextTrimming == TextTrimming.None ? "" : "（已显示省略号）";
             if (textBlock.TextWrapping == TextWrapping.NoWrap)
             {
                 if (formatted.Width > available + Tolerance)
-                    report("text-truncated", label, $"文本需要宽度 {Number(formatted.Width)}，可用 {Number(available)}{trimming}", rect);
+                    report.TextTruncated(label, wrapped: false, formatted.Width, available, textBlock.TextTrimming != TextTrimming.None,
+                        rect.X, rect.Y, rect.Width, rect.Height);
             }
             else
             {
                 formatted.MaxTextWidth = Math.Max(available, 1);
                 if (formatted.Height > availableHeight + Tolerance)
-                    report("text-truncated", label, $"换行后需要高度 {Number(formatted.Height)}，可用 {Number(availableHeight)}{trimming}", rect);
+                    report.TextTruncated(label, wrapped: true, formatted.Height, availableHeight, textBlock.TextTrimming != TextTrimming.None,
+                        rect.X, rect.Y, rect.Width, rect.Height);
             }
             var inkWidth = Math.Min(formatted.Width, available);
             var offset = textBlock.TextAlignment switch
@@ -181,27 +151,10 @@ internal static class LayoutReport
         inner.X >= clip.X - Tolerance && inner.Y >= clip.Y - Tolerance
         && inner.Right <= clip.Right + Tolerance && inner.Bottom <= clip.Bottom + Tolerance;
 
-    private static string Label(Control element)
-    {
-        var label = TypeName(element) + (string.IsNullOrEmpty(element.Name) ? "" : "#" + element.Name);
-        var text = element is TextBlock textBlock ? textBlock.Text : element is ContentControl { Content: string content } ? content : null;
-        return string.IsNullOrEmpty(text) ? label : $"{label}「{Shorten(text, 30)}」";
-    }
+    private static string Label(Control element) => LayoutReportBuilder.Label(TypeName(element), element.Name,
+        element is TextBlock textBlock ? textBlock.Text : element is ContentControl { Content: string content } ? content : null);
 
-    private static string TypeName(Control element) => element.GetType().Namespace?.StartsWith("Avalonia", StringComparison.Ordinal) == true
-        ? element.GetType().Name : element.GetType().FullName ?? element.GetType().Name;
+    private static string TypeName(Control element) => LayoutReportBuilder.TypeName(element.GetType(), "Avalonia");
 
-    private static string? Shorten(string? text, int length)
-    {
-        if (string.IsNullOrEmpty(text)) return null;
-        var single = text.Replace('\r', ' ').Replace('\n', ' ');
-        return single.Length <= length ? single : single[..length] + "…";
-    }
-
-    private static double Area(Rect rect) => rect.Width * rect.Height;
-    private static double[] Box(Rect rect) => rect.Width <= 0 || rect.Height <= 0 ? [] : [Round(rect.X), Round(rect.Y), Round(rect.Width), Round(rect.Height)];
-    private static string Describe(Rect rect) => rect.Width <= 0 || rect.Height <= 0 ? "0×0" : Size(rect.Width, rect.Height);
-    private static double Round(double value) => Math.Round(value, 1);
-    private static string Number(double value) => Round(value).ToString(CultureInfo.InvariantCulture);
-    private static string Size(double width, double height) => $"{Number(width)}×{Number(height)}";
+    private static double Positive(double value) => value > 0 ? value : 0;
 }

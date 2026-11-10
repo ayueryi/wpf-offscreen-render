@@ -14,6 +14,7 @@
     <Compile Include="..\..\assets\shared\Json.cs" Link="Json.cs" />
     <Compile Include="..\..\assets\shared\RenderOutcome.cs" Link="RenderOutcome.cs" />
     <Compile Include="..\..\assets\shared\HarnessConfig.cs" Link="HarnessConfig.cs" />
+    <Compile Include="..\..\assets\shared\LayoutReport.cs" Link="LayoutReport.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

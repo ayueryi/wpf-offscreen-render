@@ -79,6 +79,71 @@ public class JsonWriterTests
     }
 }
 
+// layout.json 报告壳：节点与问题的字段、重叠阈值、上限。
+public class LayoutReportBuilderTests
+{
+    private static object? Field(List<KeyValuePair<string, object?>> fields, string key) => fields.First(field => field.Key == key).Value;
+
+    [Fact]
+    public void Overlap_needs_both_area_and_share_of_the_smaller_ink()
+    {
+        var report = new LayoutReportBuilder();
+        report.AddInk("A", 0, 0, 10, 10);
+        report.AddInk("B", 8, 8, 10, 10);   // 交叠 2×2 = 4，面积不大于 4，不报
+        report.AddInk("C", 0, 30, 100, 10);
+        report.AddInk("D", 0, 30, 10, 10);  // 交叠 10×10，占较小一块的全部，报
+        var (fields, count) = report.Build(200, 100);
+
+        Assert.Equal(1, count);
+        var issue = Assert.Single((List<object?>)Field(fields, "issues")!);
+        var fieldsOfIssue = Assert.IsType<List<KeyValuePair<string, object?>>>(issue);
+        Assert.Equal("overlap", Field(fieldsOfIssue, "kind"));
+        Assert.Equal("与 D 的文本重叠 10×10", Field(fieldsOfIssue, "message"));
+        Assert.Equal(new[] { 0.0, 0.0, 200.0, 100.0 }, (double[])Field(fields, "viewport")!);
+    }
+
+    [Fact]
+    public void Zero_size_is_reported_for_content_but_not_for_controls()
+    {
+        var report = new LayoutReportBuilder();
+        report.ZeroSize(isControl: true, "Button#Ok", 0, 36, 0, 0, 0, 36);
+        report.ZeroSize(isControl: false, "TextBlock#Hidden", 0, 12, 5, 6, 0, 12);
+        var (fields, count) = report.Build(100, 100);
+
+        Assert.Equal(1, count);
+        var issue = Assert.IsType<List<KeyValuePair<string, object?>>>(Assert.Single((List<object?>)Field(fields, "issues")!));
+        Assert.Equal("zero-size", Field(issue, "kind"));
+        Assert.Equal("布局尺寸为 0×12，内容不可见", Field(issue, "message"));
+        // 宽或高为 0 的矩形在报告里记成空数组，与原来 Rect.IsEmpty 的写法一致。
+        Assert.Empty((double[])Field(issue, "rect")!);
+        Assert.False((bool)Field(fields, "nodesTruncated")!);
+    }
+
+    [Fact]
+    public void Nodes_stop_at_the_cap_and_mark_truncation()
+    {
+        var report = new LayoutReportBuilder();
+        for (var i = 0; i <= LayoutReportBuilder.MaxNodes; i++)
+            report.AddNode(i, "Border", null, 0, 0, 10, 10, i == 0 ? "第一行\n换行" : null);
+        var (fields, _) = report.Build(10, 10);
+
+        Assert.Equal(LayoutReportBuilder.MaxNodes, Field(fields, "nodeCount"));
+        Assert.True((bool)Field(fields, "nodesTruncated")!);
+        var first = Assert.IsType<List<KeyValuePair<string, object?>>>(((List<object?>)Field(fields, "nodes")!)[0]);
+        Assert.Equal("第一行 换行", Field(first, "text"));
+        Assert.Null(Field(first, "name"));
+    }
+
+    [Fact]
+    public void Label_and_type_name_follow_the_existing_wording()
+    {
+        Assert.Equal("TextBlock#Title「短文本」", LayoutReportBuilder.Label("TextBlock", "Title", "短文本"));
+        Assert.Equal("TextBlock", LayoutReportBuilder.Label("TextBlock", null, ""));
+        Assert.Equal("Button", LayoutReportBuilder.TypeName(typeof(string), "System"));
+        Assert.Equal(typeof(string).FullName, LayoutReportBuilder.TypeName(typeof(string), "Other"));
+    }
+}
+
 // harness.json 读取端：字段、互斥校验、有没有交互步骤。
 public class HarnessConfigTests
 {
