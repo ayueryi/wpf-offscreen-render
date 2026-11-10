@@ -1,9 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
@@ -91,10 +88,10 @@ internal static class Program
                 using (var sha = SHA256.Create())
                     sha256 = BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(pngPath))).Replace("-", "").ToLowerInvariant();
                 // 绑定问题条数与退出码在 finally 中补齐后一次性写出。
-                manifest = BuildManifest(args, Optional, view, hosted, theme, width, height, dpi, root, background, backgroundSource,
+                manifest = BuildManifest(Optional, view, hosted, theme, width, height, dpi, root, background, backgroundSource,
                     listener.SelfCheckHit, layoutIssueCount, layoutReportError, elementRect, elementError, stepReports, stepsFailed, sha256);
                 // 3：有步骤失败（结果仍完整写出，不写 error.txt）；2：有绑定问题。
-                exitCode = !listener.SelfCheckHit ? 1 : stepsFailed ? 3 : listener.Errors.Count > 0 ? 2 : 0;
+                exitCode = RenderOutcome.ResolveExitCode(listener.SelfCheckHit, stepsFailed, listener.Errors.Count);
                 if (!listener.SelfCheckHit)
                     File.WriteAllText(Path.Combine(outDir, "error.txt"), "绑定监听自检未命中，不能宣称绑定检查通过。");
             }
@@ -209,43 +206,27 @@ internal static class Program
         }
     }
 
-    private static List<KeyValuePair<string, object?>> BuildManifest(string[] args, Func<string, string?> optional, FrameworkElement view,
+    // 公共字段由 RenderOutcome 统一拼装；这里只交 WPF 自己知道的事实：步骤结果与 RightToLeft 警告。
+    private static List<KeyValuePair<string, object?>> BuildManifest(Func<string, string?> optional, FrameworkElement view,
         bool hosted, string theme, int width, int height, int dpi, FrameworkElement root, Brush? background, string backgroundSource,
         bool selfCheckHit, int? layoutIssueCount, string? layoutReportError, double[]? elementRect, string? elementError,
         List<object?>? stepReports, bool stepsFailed, string sha256)
     {
-        return
-        [
-            new("generatedAt", DateTime.UtcNow.ToString("O")),
-            new("toolVersion", optional("--tool-version")),
-            new("mode", hosted ? "window-host" : "layout-only"),
-            new("sourceViewType", view.GetType().FullName),
-            new("theme", theme),
-            new("widthDip", width), new("heightDip", height),
-            new("pixelWidth", (int)Math.Ceiling(width * dpi / 96.0)), new("pixelHeight", (int)Math.Ceiling(height * dpi / 96.0)), new("dpi", dpi),
-            new("actualWidthDip", root.ActualWidth), new("actualHeightDip", root.ActualHeight),
-            new("background", background?.ToString() ?? "transparent"), new("backgroundSource", backgroundSource),
-            new("bindingTraceVerified", selfCheckHit),
-            new("layoutIssueCount", layoutIssueCount),
-            new("layoutReportError", layoutReportError),
-            new("element", optional("--element")),
-            new("elementRectDip", elementRect),
-            new("elementImage", optional("--element") is null || elementError is not null ? null : "element.png"),
-            new("elementError", elementError),
-            new("stepCount", stepReports?.Count),
-            new("stepsFailed", stepReports is null ? null : stepsFailed),
-            new("steps", stepReports is null ? null : "steps.json"),
-            new("image", "snapshot.png"),
-            new("sha256", sha256),
-            new("targetFramework", typeof(Program).Assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName),
-            new("runtime", RuntimeInformation.FrameworkDescription),
-            new("processArchitecture", RuntimeInformation.ProcessArchitecture.ToString()),
-            new("machineName", Environment.MachineName),
-            // 业务 Window 为 RightToLeft 时，镜像变换在 Window 上而截图只渲染其 Content，结果未镜像。
-            new("warning", hosted && view is Window { FlowDirection: FlowDirection.RightToLeft }
-                ? "Window.FlowDirection 为 RightToLeft：截图与布局坐标未镜像（镜像在 Window 本身上）。可改为渲染其内容的 UserControl。" : null),
-            new("note", "Visual snapshot; native windows, input, and performance require separate verification.")
-        ];
+        // 业务 Window 为 RightToLeft 时，镜像变换在 Window 上而截图只渲染其 Content，结果未镜像。
+        var warning = hosted && view is Window { FlowDirection: FlowDirection.RightToLeft }
+            ? "Window.FlowDirection 为 RightToLeft：截图与布局坐标未镜像（镜像在 Window 本身上）。可改为渲染其内容的 UserControl。" : null;
+        return RenderOutcome.BuildManifest(null, optional("--tool-version"), hosted ? "window-host" : "layout-only",
+            view.GetType().FullName, theme, width, height, dpi, root.ActualWidth, root.ActualHeight,
+            background?.ToString(), backgroundSource, selfCheckHit, layoutIssueCount, layoutReportError,
+            optional("--element"), elementRect, elementError,
+            new KeyValuePair<string, object?>[]
+            {
+                new("stepCount", stepReports?.Count),
+                new("stepsFailed", stepReports is null ? null : stepsFailed),
+                new("steps", stepReports is null ? null : "steps.json"),
+            },
+            sha256,
+            new KeyValuePair<string, object?>[] { new("warning", warning), new("note", "Visual snapshot; native windows, input, and performance require separate verification.") });
     }
 
     // 先写出全部结果，再执行业务清理：清理可能卡住（例如窗口关闭确认框），结果不能因此丢失。
@@ -254,16 +235,9 @@ internal static class Program
     {
         listener.Flush();
         PresentationTraceSources.DataBindingSource.Listeners.Remove(listener);
-        File.WriteAllLines(Path.Combine(outDir, "binding-errors.txt"), listener.Errors);
-        File.WriteAllText(Path.Combine(outDir, "binding-errors.json"), Json.Write(listener.Errors.Select(BindingIssues.Describe).ToList()));
-        if (exitCode == 0 && listener.Errors.Count > 0) exitCode = 2;
-        if (manifest is not null)
-        {
-            manifest.Add(new("bindingWarningOrErrorCount", listener.Errors.Count));
-            manifest.Add(new("exitCode", exitCode));
-            File.WriteAllText(Path.Combine(outDir, "manifest.json"), Json.Write(manifest));
-        }
-        Console.WriteLine($"{outDir} (exit={exitCode})");
+        // 步骤失败（3）优先于绑定问题（2）：失败步骤本身常会带出绑定错误，不能把退出码降级。
+        if (exitCode == RenderOutcome.ExitOk && listener.Errors.Count > 0) exitCode = RenderOutcome.ExitBindingIssues;
+        RenderOutcome.WriteResults(outDir, manifest, listener.Errors, listener.Errors.Select(BindingIssues.Describe).ToList(), exitCode);
         try
         {
             if (view != null) ViewFactory.Cleanup(view);

@@ -1,7 +1,4 @@
 using System.Globalization;
-using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using Avalonia;
 using Avalonia.Controls;
@@ -99,10 +96,10 @@ internal static class Program
             using (var sha = SHA256.Create())
                 sha256 = Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(pngPath))).ToLowerInvariant();
 
+            var warning = dpi == 96 ? null : "Avalonia 无头窗口的 RenderScaling 固定为 1：布局与文本度量仍按 96 DPI 的 DIP 计算，请求的 DPI 只放大输出位图（矢量缩放），不等同于真实高 DPI 显示器上的布局。";
             var manifest = BuildManifest(Optional, view, theme, width, height, dpi, background, backgroundSource,
-                log.SelfCheckHit, layoutIssueCount, layoutReportError, elementRect, elementError, sha256,
-                dpi == 96 ? null : "Avalonia 无头窗口的 RenderScaling 固定为 1：布局与文本度量仍按 96 DPI 的 DIP 计算，请求的 DPI 只放大输出位图（矢量缩放），不等同于真实高 DPI 显示器上的布局。");
-            exitCode = !log.SelfCheckHit ? 1 : log.Errors.Count > 0 ? 2 : 0;
+                log.SelfCheckHit, layoutIssueCount, layoutReportError, elementRect, elementError, sha256, warning);
+            exitCode = RenderOutcome.ResolveExitCode(log.SelfCheckHit, stepsFailed: false, log.Errors.Count);
             if (!log.SelfCheckHit)
                 File.WriteAllText(Path.Combine(outDir, "error.txt"), "绑定监听自检未命中，不能宣称绑定检查通过。");
             try { ViewFactory.Cleanup(view); }
@@ -214,50 +211,21 @@ internal static class Program
         catch (Exception ex) { return (null, ex.GetType().Name + ": " + ex.Message); }
     }
 
+    // 公共字段由 RenderOutcome 统一拼装；这里只交 Avalonia 自己知道的事实：stack、实际尺寸与 DPI 警告。
     private static List<KeyValuePair<string, object?>> BuildManifest(Func<string, string?> optional, Control view,
         string theme, int width, int height, int dpi, IBrush? background, string backgroundSource,
         bool selfCheckHit, int? layoutIssueCount, string? layoutReportError, double[]? elementRect, string? elementError,
         string sha256, string? warning) =>
-    [
-        new("stack", "avalonia"),
-        new("generatedAt", DateTime.UtcNow.ToString("O")),
-        new("toolVersion", optional("--tool-version")),
-        new("mode", "layout-only"),
-        new("sourceViewType", view.GetType().FullName),
-        new("theme", theme),
-        new("widthDip", width), new("heightDip", height),
-        new("pixelWidth", (int)Math.Ceiling(width * dpi / 96.0)), new("pixelHeight", (int)Math.Ceiling(height * dpi / 96.0)), new("dpi", dpi),
-        new("actualWidthDip", view.Bounds.Width), new("actualHeightDip", view.Bounds.Height),
-        new("background", background?.ToString() ?? "transparent"), new("backgroundSource", backgroundSource),
-        new("bindingTraceVerified", selfCheckHit),
-        new("layoutIssueCount", layoutIssueCount),
-        new("layoutReportError", layoutReportError),
-        new("element", optional("--element")),
-        new("elementRectDip", elementRect),
-        new("elementImage", optional("--element") is null || elementError is not null ? null : "element.png"),
-        new("elementError", elementError),
-        new("image", "snapshot.png"),
-        new("sha256", sha256),
-        new("targetFramework", typeof(Program).Assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName),
-        new("runtime", RuntimeInformation.FrameworkDescription),
-        new("processArchitecture", RuntimeInformation.ProcessArchitecture.ToString()),
-        new("machineName", Environment.MachineName),
-        new("warning", warning),
-        new("note", "Avalonia headless snapshot; native windows, input, and performance require separate verification.")
-    ];
+        RenderOutcome.BuildManifest(
+            new[] { new KeyValuePair<string, object?>("stack", "avalonia") },
+            optional("--tool-version"), "layout-only", view.GetType().FullName, theme, width, height, dpi,
+            view.Bounds.Width, view.Bounds.Height, background?.ToString(), backgroundSource,
+            selfCheckHit, layoutIssueCount, layoutReportError, optional("--element"), elementRect, elementError,
+            null, sha256,
+            new[] { new KeyValuePair<string, object?>("warning", warning), new KeyValuePair<string, object?>("note", "Avalonia headless snapshot; native windows, input, and performance require separate verification.") });
 
-    private static void WriteResults(string outDir, List<KeyValuePair<string, object?>>? manifest, BindingLog log, int exitCode)
-    {
-        File.WriteAllLines(Path.Combine(outDir, "binding-errors.txt"), log.Errors);
-        File.WriteAllText(Path.Combine(outDir, "binding-errors.json"), Json.Write(log.Errors.Select(BindingIssues.Describe).ToList()));
-        if (manifest is not null)
-        {
-            manifest.Add(new("bindingWarningOrErrorCount", log.Errors.Count));
-            manifest.Add(new("exitCode", exitCode));
-            File.WriteAllText(Path.Combine(outDir, "manifest.json"), Json.Write(manifest));
-        }
-        Console.WriteLine($"{outDir} (exit={exitCode})");
-    }
+    private static void WriteResults(string outDir, List<KeyValuePair<string, object?>>? manifest, BindingLog log, int exitCode) =>
+        RenderOutcome.WriteResults(outDir, manifest, log.Errors, log.Errors.Select(BindingIssues.Describe).ToList(), exitCode);
 
     private static (IBrush? Brush, string Source) ResolveBackground(string value, string theme)
     {

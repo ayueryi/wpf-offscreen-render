@@ -1,3 +1,4 @@
+using System.IO;
 using Xunit;
 
 namespace AgentRenderLogic.Tests;
@@ -75,6 +76,85 @@ public class JsonWriterTests
         var lines = json.Split('\n').Where(line => line.Contains("\"a\":")).ToList();
         Assert.Equal(2, lines.Count);
         Assert.All(lines, line => Assert.Contains("{ \"a\":", line));
+    }
+}
+
+// 结果清单写端：字段顺序、像素换算、退出码含义、绑定结果落盘。
+public class RenderOutcomeTests
+{
+    [Fact]
+    public void Exit_code_prefers_self_check_over_steps_over_bindings()
+    {
+        Assert.Equal(RenderOutcome.ExitFailed, RenderOutcome.ResolveExitCode(selfCheckHit: false, stepsFailed: true, bindingIssueCount: 4));
+        Assert.Equal(RenderOutcome.ExitStepFailed, RenderOutcome.ResolveExitCode(selfCheckHit: true, stepsFailed: true, bindingIssueCount: 4));
+        Assert.Equal(RenderOutcome.ExitBindingIssues, RenderOutcome.ResolveExitCode(selfCheckHit: true, stepsFailed: false, bindingIssueCount: 1));
+        Assert.Equal(RenderOutcome.ExitOk, RenderOutcome.ResolveExitCode(selfCheckHit: true, stepsFailed: false, bindingIssueCount: 0));
+    }
+
+    [Fact]
+    public void Manifest_keeps_shared_order_and_slots_adapter_facts()
+    {
+        var fields = RenderOutcome.BuildManifest(
+            head: new[] { new KeyValuePair<string, object?>("stack", "avalonia") },
+            toolVersion: "2.1.0", mode: "layout-only", sourceViewType: "Sample.View", theme: "dark",
+            width: 100, height: 50, dpi: 192, actualWidthDip: 100.5, actualHeightDip: 49.5,
+            background: null, backgroundSource: "theme-fallback",
+            selfCheckHit: true, layoutIssueCount: 0, layoutReportError: null,
+            element: "Title", elementRect: new[] { 1.0, 2.0, 3.0, 4.0 }, elementError: null,
+            middle: new[] { new KeyValuePair<string, object?>("stepCount", 2) },
+            sha256: "abc",
+            tail: new[] { new KeyValuePair<string, object?>("warning", "dpi"), new KeyValuePair<string, object?>("note", "n") });
+
+        var keys = fields.Select(field => field.Key).ToList();
+        Assert.Equal("stack", keys[0]);
+        Assert.Equal(new[] { "element", "elementRectDip", "elementImage", "elementError", "stepCount", "image", "sha256" },
+            keys.SkipWhile(key => key != "element").Take(7));
+        Assert.Equal(new[] { "warning", "note" }, keys.TakeLast(2));
+
+        // 192 DPI 是 96 的两倍，100×50 DIP 向上取整成 200×100 像素。
+        Assert.Equal(200, fields.First(field => field.Key == "pixelWidth").Value);
+        Assert.Equal(100, fields.First(field => field.Key == "pixelHeight").Value);
+        // 背景没给时按透明记录；有元素且没有错误时指向 element.png。
+        Assert.Equal("transparent", fields.First(field => field.Key == "background").Value);
+        Assert.Equal("element.png", fields.First(field => field.Key == "elementImage").Value);
+    }
+
+    [Fact]
+    public void Element_image_is_omitted_when_capture_failed_or_not_requested()
+    {
+        var failed = RenderOutcome.BuildManifest(null, null, "layout-only", null, "light", 10, 10, 96, 10, 10,
+            "#fff", "explicit", true, null, null, "Title", null, "找不到元素", null, "abc", null);
+        Assert.Null(failed.First(field => field.Key == "elementImage").Value);
+
+        var none = RenderOutcome.BuildManifest(null, null, "layout-only", null, "light", 10, 10, 96, 10, 10,
+            "#fff", "explicit", true, null, null, null, null, null, null, "abc", null);
+        Assert.Null(none.First(field => field.Key == "elementImage").Value);
+    }
+
+    [Fact]
+    public void Write_results_persists_bindings_and_appends_count_and_exit_code()
+    {
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "render-outcome-" + Guid.NewGuid().ToString("N")));
+        try
+        {
+            var manifest = new List<KeyValuePair<string, object?>> { new("mode", "layout-only") };
+            var issues = new[] { Json.Object(("summary", "TextBlock.Text <- Path=Missing")) };
+            RenderOutcome.WriteResults(dir.FullName, manifest, new[] { "raw binding error" }, issues, RenderOutcome.ExitBindingIssues);
+
+            Assert.Equal("raw binding error", File.ReadAllLines(Path.Combine(dir.FullName, "binding-errors.txt")).Single());
+            Assert.Contains("TextBlock.Text", File.ReadAllText(Path.Combine(dir.FullName, "binding-errors.json")));
+            var written = File.ReadAllText(Path.Combine(dir.FullName, "manifest.json"));
+            Assert.Contains("\"bindingWarningOrErrorCount\":", written);
+            Assert.Contains("\"exitCode\":", written);
+            // 条数与退出码是补在末尾的，不插进宿主交来的字段之间。
+            Assert.Equal(new[] { "mode", "bindingWarningOrErrorCount", "exitCode" }, manifest.Select(field => field.Key));
+            Assert.Equal(1, manifest[1].Value);
+            Assert.Equal(RenderOutcome.ExitBindingIssues, manifest[2].Value);
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
     }
 }
 

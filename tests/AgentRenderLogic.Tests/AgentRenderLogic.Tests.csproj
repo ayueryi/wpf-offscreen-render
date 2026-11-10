@@ -12,6 +12,7 @@
   <ItemGroup>
     <Compile Include="..\..\assets\wpf\Diagnostics.cs" Link="Diagnostics.cs" />
     <Compile Include="..\..\assets\shared\Json.cs" Link="Json.cs" />
+    <Compile Include="..\..\assets\shared\RenderOutcome.cs" Link="RenderOutcome.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
