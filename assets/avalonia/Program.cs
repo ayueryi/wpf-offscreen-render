@@ -49,7 +49,7 @@ internal static class Program
                 WriteResults(outDir, null, new BindingLog(), exitCode);
                 return exitCode;
             }
-            if (StepsRequested(Optional("--config")))
+            if (HarnessConfig.Load(Optional("--config")) is { HasSteps: true })
             {
                 File.WriteAllText(Path.Combine(outDir, "error.txt"),
                     "Avalonia 宿主本期不支持交互步骤（steps）。请去掉 steps 后再渲染，或改用 WPF 宿主。");
@@ -122,13 +122,6 @@ internal static class Program
         probe.Bind(TextBlock.TextProperty, new Binding(marker));
         probe.Measure(new Size(100, 30));
         probe.Arrange(new Rect(0, 0, 100, 30));
-    }
-
-    private static bool StepsRequested(string? configPath)
-    {
-        if (configPath is null || !File.Exists(configPath)) return false;
-        var text = File.ReadAllText(configPath);
-        return text.Contains("\"steps\"") && !text.Contains("\"steps\": null") && !text.Contains("\"steps\":null") && !text.Contains("\"steps\": []") && !text.Contains("\"steps\":[]");
     }
 
     // 把视图放进屏外的无头窗口；业务 Window 直接使用并设置视口尺寸。

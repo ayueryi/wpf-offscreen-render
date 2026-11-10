@@ -79,6 +79,60 @@ public class JsonWriterTests
     }
 }
 
+// harness.json 读取端：字段、互斥校验、有没有交互步骤。
+public class HarnessConfigTests
+{
+    private static HarnessConfig Read(string json)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "harness-config-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, json);
+        try { return HarnessConfig.Load(path)!; }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Reads_fields_and_ignores_step_contents()
+    {
+        var config = Read("""
+            {"viewType":"Sample.View","resourceDictionaries":["pack://theme.xaml"],"assemblies":["SampleViews"],
+             "steps":[{"action":"set","element":{"name":"Title"}}],"continueOnError":true}
+            """);
+        Assert.Equal("Sample.View", config.ViewType);
+        Assert.Equal(new[] { "pack://theme.xaml" }, config.ResourceDictionaries);
+        Assert.Equal(new[] { "SampleViews" }, config.Assemblies);
+        Assert.True(config.HasSteps);
+    }
+
+    [Theory]
+    [InlineData("{\"steps\": null}")]
+    [InlineData("{\"steps\": []}")]
+    [InlineData("{ \"steps\" : [ ] }")]
+    public void Empty_steps_are_not_requested(string json)
+    {
+        Assert.False(Read(json).HasSteps);
+    }
+
+    [Fact]
+    public void Missing_file_reads_as_null()
+    {
+        Assert.Null(HarnessConfig.Load(null));
+        Assert.Null(HarnessConfig.Load(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json")));
+    }
+
+    [Fact]
+    public void Exclusive_choices_are_rejected_with_the_existing_messages()
+    {
+        var both = Read("{\"viewType\":\"A\",\"xaml\":\"b.xaml\",\"dataContextType\":\"C\",\"dataContextFactory\":\"C.Create\"}");
+        Assert.Equal("harness.json 中 viewType 与 xaml 只能二选一。", Assert.Throws<InvalidOperationException>(both.EnsureExclusiveView).Message);
+        Assert.Equal("harness.json 中 dataContextType 与 dataContextFactory 只能二选一。",
+            Assert.Throws<InvalidOperationException>(both.EnsureExclusiveDataContext).Message);
+
+        var one = Read("{\"viewType\":\"A\",\"dataContextType\":\"C\"}");
+        one.EnsureExclusiveView();
+        one.EnsureExclusiveDataContext();
+    }
+}
+
 // 结果清单写端：字段顺序、像素换算、退出码含义、绑定结果落盘。
 public class RenderOutcomeTests
 {

@@ -124,20 +124,11 @@ foreach ($file in 'Directory.Build.props', 'Directory.Build.targets') {
     '<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>', $utf8)
 # 空的 global.json 截断 SDK 版本查找：上层仓库锁定的 SDK（可能未安装或过旧）不影响宿主构建，使用本机最新 SDK。
 [IO.File]::WriteAllText((Join-Path $WorkDir 'global.json'), '{}', $utf8)
-$config = [ordered]@{
-    stack = $Stack
-    viewType = if ($ViewType) { $ViewType } else { $null }
-    xaml = if ($Xaml) { $Xaml } else { $null }
-    dataContextType = if ($DataContextType) { $DataContextType } else { $null }
-    dataContextFactory = if ($DataContextFactory) { $DataContextFactory } else { $null }
-    resourceDictionaries = @($ResourceDictionary)
-    assemblies = @($targets | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.Path) })
-    steps = $normalizedSteps
-    continueOnError = [bool]$ContinueOnError
-    animations = $Animations
-}
 $configPath = Join-Path $WorkDir 'harness.json'
-[IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 8), $utf8)
+. (Join-Path $PSScriptRoot 'HarnessConfig.ps1')
+Write-HarnessConfig -Path $configPath -Stack $Stack -ViewType $ViewType -Xaml $Xaml -DataContextType $DataContextType `
+    -DataContextFactory $DataContextFactory -ResourceDictionary $ResourceDictionary -AssemblyPath @($targets | ForEach-Object { $_.Path }) `
+    -Steps $normalizedSteps -ContinueOnError $ContinueOnError -Animations $Animations
 # 按字面路径复制：安装目录含 [ ] 时 -Path 会被当作通配符。
 # 技术栈宿主与共享 JSON 写入器分目录，避免把 WPF 引用带进 Avalonia 工程。
 $hostDir = if ($Stack -eq 'avalonia') { '..\assets\avalonia' } else { '..\assets\wpf' }

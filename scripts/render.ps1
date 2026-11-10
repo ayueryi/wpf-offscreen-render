@@ -237,20 +237,10 @@ try {
     }
     if (Test-Path -LiteralPath $projectPath) {
         # 视图配置只影响 harness.json，不需要重新构建。
-        # 注意不能叫 $config：PowerShell 变量不区分大小写，会覆盖 [string]$Config 参数。
-        $harnessConfig = [ordered]@{
-            stack = $Stack
-            viewType = if ($ViewType) { $ViewType } else { $null }
-            xaml = if ($Xaml) { $Xaml } else { $null }
-            dataContextType = if ($DataContextType) { $DataContextType } else { $null }
-            dataContextFactory = if ($DataContextFactory) { $DataContextFactory } else { $null }
-            resourceDictionaries = @($ResourceDictionary)
-            assemblies = @($assemblies | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_) })
-            steps = $normalizedSteps
-            continueOnError = [bool]$ContinueOnError
-            animations = $Animations
-        }
-        [IO.File]::WriteAllText((Join-Path $workDir 'harness.json'), ($harnessConfig | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+        . (Join-Path $PSScriptRoot 'HarnessConfig.ps1')
+        Write-HarnessConfig -Path (Join-Path $workDir 'harness.json') -Stack $Stack -ViewType $ViewType -Xaml $Xaml `
+            -DataContextType $DataContextType -DataContextFactory $DataContextFactory -ResourceDictionary $ResourceDictionary `
+            -AssemblyPath $assemblies -Steps $normalizedSteps -ContinueOnError $ContinueOnError -Animations $Animations
         Copy-Item -LiteralPath $factorySource -Destination (Join-Path $workDir 'ViewFactory.cs') -Force
     }
     else {

@@ -1,7 +1,4 @@
 using System.IO;
-using System.Reflection;
-using System.Runtime.Serialization;
-using System.Runtime.Serialization.Json;
 using System.Windows;
 using System.Windows.Markup;
 
@@ -15,13 +12,9 @@ internal static class ConfiguredView
     // 返回 null 表示未配置视图，由 ViewFactory 使用自己的实现。
     public static FrameworkElement? TryCreate(string theme)
     {
-        if (ConfigPath is null || !File.Exists(ConfigPath)) return null;
-        HarnessConfig config;
-        using (var stream = File.OpenRead(ConfigPath))
-            config = (HarnessConfig?)new DataContractJsonSerializer(typeof(HarnessConfig)).ReadObject(stream) ?? new HarnessConfig();
-        if (config.ViewType is not null && config.Xaml is not null)
-            throw new InvalidOperationException("harness.json 中 viewType 与 xaml 只能二选一。");
-        businessAssemblies = config.Assemblies ?? [];
+        var config = HarnessConfig.Load(ConfigPath);
+        if (config is null) return null;
+        config.EnsureExclusiveView();
 
         foreach (var source in config.ResourceDictionaries ?? [])
         {
@@ -35,7 +28,7 @@ internal static class ConfiguredView
         FrameworkElement? view = null;
         if (config.ViewType is not null)
         {
-            view = Activator.CreateInstance(ResolveType(config.ViewType), nonPublic: true) as FrameworkElement
+            view = Activator.CreateInstance(config.ResolveType(config.ViewType), nonPublic: true) as FrameworkElement
                 ?? throw new InvalidOperationException($"{config.ViewType} 不是 FrameworkElement。");
         }
         else if (config.Xaml is not null)
@@ -46,12 +39,11 @@ internal static class ConfiguredView
                 ?? throw new InvalidOperationException($"XAML 根元素不是 FrameworkElement：{path}");
         }
 
-        if (view is not null && config.DataContextType is not null && config.DataContextFactory is not null)
-            throw new InvalidOperationException("harness.json 中 dataContextType 与 dataContextFactory 只能二选一。");
+        if (view is not null) config.EnsureExclusiveDataContext();
         if (view is not null && config.DataContextType is not null)
-            view.DataContext = Activator.CreateInstance(ResolveType(config.DataContextType), nonPublic: true);
+            view.DataContext = Activator.CreateInstance(config.ResolveType(config.DataContextType), nonPublic: true);
         if (view is not null && config.DataContextFactory is not null)
-            view.DataContext = InvokeFactory(config.DataContextFactory);
+            view.DataContext = config.InvokeFactory(config.DataContextFactory);
         return view;
     }
 
@@ -59,58 +51,4 @@ internal static class ConfiguredView
     private static bool IsFullyQualifiedPath(string path) =>
         path.StartsWith(@"\\", StringComparison.Ordinal)
         || path.Length >= 3 && char.IsLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/');
-
-    // "Namespace.Type.Method"：调用无参静态方法（可为 non-public）创建 DataContext，适合需要构造参数或 stub 服务的 ViewModel。
-    private static object? InvokeFactory(string factory)
-    {
-        var dot = factory.LastIndexOf('.');
-        if (dot <= 0 || dot == factory.Length - 1) throw new InvalidOperationException($"dataContextFactory 应为 类型全名.方法名：{factory}");
-        var type = ResolveType(factory.Substring(0, dot));
-        var method = type.GetMethod(factory.Substring(dot + 1), BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, null, Type.EmptyTypes, null)
-            ?? throw new InvalidOperationException($"{type.FullName} 上没有无参静态方法 {factory.Substring(dot + 1)}。");
-        return method.Invoke(null, null);
-    }
-
-    private static string[] businessAssemblies = [];
-
-    // 支持程序集限定名；仅写全名时依次在已加载程序集、-AssemblyPath 指定的业务程序集、输出目录其余 DLL 中查找。
-    // 先查业务程序集，避免为找一个类型加载（并初始化）无关的依赖程序集。
-    private static Type ResolveType(string name)
-    {
-        var type = Type.GetType(name, throwOnError: false);
-        if (type is not null) return type;
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            type = assembly.GetType(name, throwOnError: false);
-            if (type is not null) return type;
-        }
-        var business = businessAssemblies.Select(assembly => Path.Combine(AppContext.BaseDirectory, assembly))
-            .SelectMany(path => new[] { path + ".dll", path + ".exe" }).Where(File.Exists).ToList();
-        var others = Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll")
-            .Where(path => !business.Contains(path, StringComparer.OrdinalIgnoreCase));
-        foreach (var dll in business.Concat(others))
-        {
-            try
-            {
-                type = Assembly.Load(AssemblyName.GetAssemblyName(dll)).GetType(name, throwOnError: false);
-            }
-            catch (BadImageFormatException) { continue; } // native DLL
-            catch (FileLoadException) { continue; }
-            if (type is not null) return type;
-        }
-        throw new InvalidOperationException($"找不到类型：{name}。确认已通过 -AssemblyPath 引用其程序集，且类型名含完整命名空间。");
-    }
-
-    // 键名区分大小写，与生成器写入的 harness.json 一致。
-    [DataContract]
-    private sealed class HarnessConfig
-    {
-        [DataMember(Name = "viewType")] public string? ViewType { get; set; }
-        [DataMember(Name = "xaml")] public string? Xaml { get; set; }
-        [DataMember(Name = "dataContextType")] public string? DataContextType { get; set; }
-        [DataMember(Name = "dataContextFactory")] public string? DataContextFactory { get; set; }
-        [DataMember(Name = "resourceDictionaries")] public string[]? ResourceDictionaries { get; set; }
-        // -AssemblyPath 中业务程序集的文件名（不含扩展名），用于优先查找类型。
-        [DataMember(Name = "assemblies")] public string[]? Assemblies { get; set; }
-    }
 }
